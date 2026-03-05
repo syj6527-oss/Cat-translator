@@ -5,7 +5,7 @@ import { callGenericPopup, POPUP_TYPE } from '../../../../scripts/utils.js';
 const extName = "cat-translator-beta";
 const stContext = getContext();
 
-// 🚦 상태 관리 (가져온 아이디어 적용)
+// 🚦 상태 관리 변수
 let isChatTranslationInProgress = false;
 let isTranslateChatCanceled = false;
 const translationInProgress = {};
@@ -28,8 +28,8 @@ const defaultSettings = {
     customKey: '',
     directModel: 'gemini-1.5-flash',
     targetLang: 'Korean',
-    temperature: 0.2, // 창의성
-    maxTokens: 2048   // 최대 길이
+    temperature: 0.2, // 창의성 조절 파라미터
+    maxTokens: 2048   // 출력 길이 제한 파라미터
 };
 
 let settings = Object.assign({}, defaultSettings, extension_settings[extName]);
@@ -42,24 +42,24 @@ function saveSettings() {
     stContext.saveSettingsDebounced();
 }
 
-// 🧺 세탁기 함수 (보내주신 정규식 반영!)
+// 🧺 세탁기 함수 (보내주신 정규식과 trim 로직 반영!)
 function cleanResult(text) {
     if (!text) return "";
     return text
-        .replace(/```[a-z]*\n?/gi, "") // 코드 블록 제거
+        .replace(/```[a-z]*\n?/gi, "") // 코드 블록 기호 제거
         .replace(/```/g, "")
         .replace(/^(번역|Translation|Output):\s*/gi, "")
-        .replace(/^\s*/gi, "") // 보내주신 코드: 앞 공백 제거
-        .trim();               // 보내주신 코드: 양끝 공백 제거
+        .replace(/^\s*/gi, "") // 앞쪽 공백 제거 정규식
+        .trim();               // 양쪽 공백 최종 제거
 }
 
-// 🚀 스마트 번역 API (404 완치 및 파라미터 적용)
+// 🚀 스마트 번역 API (파라미터 및 안전 설정 적용)
 async function fetchTranslation(text) {
     if (!text || text.trim() === "") return null;
     const isToEnglish = ((text.match(/[가-힣]/g) || []).length >= (text.match(/[a-zA-Z]/g) || []).length);
     const targetLang = isToEnglish ? "English" : settings.targetLang;
     
-    // 💰 토큰 아낌 알림
+    // 💰 토큰 아낌 캐시 확인
     const cacheKey = `${targetLang}_${text.trim()}`;
     if (translationCache[cacheKey]) {
         catNotify("🐱 캐시 사용: 토큰을 아꼈습니다!");
@@ -80,10 +80,10 @@ async function fetchTranslation(text) {
             body: JSON.stringify({
                 contents: [{ role: "user", parts: [{ text: `Translate to ${targetLang}. Output ONLY raw text.\n\n${text}` }] }],
                 generationConfig: { 
-                    temperature: settings.temperature, 
-                    maxOutputTokens: settings.maxTokens 
+                    temperature: settings.temperature, // 파라미터 적용
+                    maxOutputTokens: settings.maxTokens  // 파라미터 적용
                 },
-                // 🛡️ 후기에서 본 "API 오류" 방지를 위한 안전 설정 해제
+                // 🛡️ API 오류 방지를 위한 안전 설정 (BLOCK_NONE으로 검열 완화)
                 safetySettings: [
                     { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
                     { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -133,7 +133,7 @@ async function processMessage(id) {
     }
 }
 
-// 🧹 일괄 삭제 (가져온 아이디어)
+// 🧹 전체 삭제 (아이디어 이식)
 async function onClearAll() {
     const confirm = await callGenericPopup('🐱 모든 번역을 지울까냥?', POPUP_TYPE.CONFIRM);
     if (!confirm) return;
@@ -146,16 +146,16 @@ async function onClearAll() {
         }
     }
     translationCache = {};
-    catNotify("🐱 원본으로 복구 완료!");
+    catNotify("🐱 원본 복구 완료!");
 }
 
-// 🌍 전체 번역 (가져온 아이디어 + 중단 로직)
+// 🌍 전체 번역 (중단 로직 포함)
 async function onBatchTranslate() {
     if (isChatTranslationInProgress) {
         isTranslateChatCanceled = true;
         return;
     }
-    const confirm = await callGenericPopup('🐱 전체 채팅 번역을 시작할까냥?', POPUP_TYPE.CONFIRM);
+    const confirm = await callGenericPopup('🐱 전체 번역을 시작할까냥?', POPUP_TYPE.CONFIRM);
     if (!confirm) return;
 
     isChatTranslationInProgress = true;
@@ -230,7 +230,7 @@ function setupUI() {
 jQuery(() => {
     setupUI();
     injectButtons();
-    // 모바일/데스크탑 통합 감시 엔진 (MutationObserver)
+    // 모바일 감시 엔진 장착
     const observer = new MutationObserver(() => injectButtons());
     const chatBody = document.getElementById('chat');
     if (chatBody) observer.observe(chatBody, { childList: true, subtree: true });
