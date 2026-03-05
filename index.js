@@ -7,7 +7,7 @@ const stContext = getContext();
 let translationCache = {};
 let isTranslatingInput = false;
 
-// 💊 알림창 (최상단 노출)
+// 💊 알림창 (토큰 알림 지원)
 function catNotify(message, type = 'success') {
     $('.cat-notification').remove();
     const bgColor = type === 'success' ? '#2ecc71' : (type === 'warning' ? '#f1c40f' : '#e74c3c');
@@ -48,19 +48,23 @@ function saveSettings() {
     translationCache = {}; 
 }
 
+// 🧺 회색 박스(코드 블록) 및 사족 세탁기
 function cleanResult(text) {
     if (!text) return "";
-    return text.replace(/^(번역|Translation|Output):\s*/gi, "").replace(/\{+(.*?)\}+/g, "$1").trim();
+    return text
+        .replace(/```[a-z]*\n?/gi, "") // 코드 블록 시작 제거
+        .replace(/```/g, "")           // 코드 블록 끝 제거
+        .replace(/^(번역|Translation|Output|English|Korean):\s*/gi, "")
+        .replace(/\{+(.*?)\}+/g, "$1") 
+        .trim();
 }
 
 function applyPreReplace(text, isToEnglish) {
     if (!settings.dictionary || settings.dictionary.trim() === "") return text;
     let dictLines = settings.dictionary.split('\n').filter(l => l.includes('='));
     if (dictLines.length === 0) return text;
-
     let processedText = text;
     dictLines.sort((a, b) => b.split('=')[0].length - a.split('=')[0].length);
-
     dictLines.forEach(line => {
         let parts = line.split('=');
         if (parts.length === 2) {
@@ -76,7 +80,7 @@ function applyPreReplace(text, isToEnglish) {
     return processedText;
 }
 
-// 🚀 스마트 번역 API
+// 🚀 스마트 번역 API (404 완치 로직)
 async function fetchTranslation(text, forceLang = null, prevTranslation = null) {
     if (!text || text.trim() === "") return null;
     
@@ -90,9 +94,9 @@ async function fetchTranslation(text, forceLang = null, prevTranslation = null) 
     }
 
     const targetLang = isToEnglish ? "English" : settings.targetLang;
-    
-    // 🧠 캐시 시스템 및 토큰 알림
     const cacheKey = `${targetLang}_${text.trim()}`;
+
+    // 💰 토큰 아낌 알림 부활!
     if (!prevTranslation && translationCache[cacheKey]) {
         catNotify("🐱 캐시 사용: 토큰을 아꼈습니다!", "success");
         return { text: translationCache[cacheKey], lang: targetLang };
@@ -100,16 +104,9 @@ async function fetchTranslation(text, forceLang = null, prevTranslation = null) 
 
     let preReplacedText = applyPreReplace(text.trim(), isToEnglish);
     
-    const STRICT_DIRECTIVE = `[CRITICAL DIRECTIVE]
-YOU ARE A MACHINE. RETURN ONLY THE RAW TRANSLATED TEXT.
-NO EXPLANATIONS. NO ALTERNATIVES. NO CONVERSATIONAL FILLER.`;
+    const STRICT_DIRECTIVE = `[CRITICAL] Translate the input into ${targetLang} exactly. Output ONLY the raw translation. NO markdown code blocks. NO explanations.`;
 
-    let basePrompt = isToEnglish 
-        ? `Translate to English.\n${STRICT_DIRECTIVE}`
-        : `${settings.prompt.replace('{{language}}', targetLang)}\n${STRICT_DIRECTIVE}`;
-
-    let variationPrompt = prevTranslation ? `\n[Provide a DIFFERENT translation than: "${prevTranslation}"]` : "";
-    let promptWithText = `${basePrompt}${variationPrompt}\n\nInput: ${preReplacedText}\nOutput:`;
+    let promptWithText = `${STRICT_DIRECTIVE}\n\nInput: ${preReplacedText}\nOutput:`;
 
     try {
         let result = "";
@@ -118,32 +115,27 @@ NO EXPLANATIONS. NO ALTERNATIVES. NO CONVERSATIONAL FILLER.`;
             result = typeof response === 'string' ? response : (response.content || "");
         } else {
             const apiKey = settings.customKey || secret_state[SECRET_KEYS.MAKERSUITE];
-            if (!apiKey) { catNotify("🐱 [Beta] API 키 없음!", "error"); return null; }
+            if (!apiKey) { catNotify("🐱 API 키 없음!", "error"); return null; }
             
-            // 🎯 404 방어: 모델 이름 정제
+            // 🎯 404 에러 방지용 주소 생성기
             let modelId = settings.directModel || "gemini-1.5-flash";
             if (modelId.startsWith('models/')) modelId = modelId.substring(7);
             
-            // 🎯 124줄: 무적의 fetch 로직 (코드 잘림 원천 봉쇄)
+            // 주소 끝에 반드시 :generateContent 가 붙어야 함
             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
             
             const response = await fetch(apiUrl, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     contents: [{ role: "user", parts: [{ text: promptWithText }] }],
-                    generationConfig: { 
-                        temperature: 0.0, 
-                        maxOutputTokens: 8192 
-                    }
+                    generationConfig: { temperature: 0.1, maxOutputTokens: 8192 }
                 })
             });
             
             if (!response.ok) {
                 const errData = await response.json();
-                throw new Error(errData.error?.message || "HTTP Error " + response.status);
+                throw new Error(errData.error?.message || `HTTP ${response.status}`);
             }
 
             const data = await response.json();
@@ -156,7 +148,7 @@ NO EXPLANATIONS. NO ALTERNATIVES. NO CONVERSATIONAL FILLER.`;
         if (translatedText && translatedText !== text) translationCache[cacheKey] = translatedText;
         return { text: translatedText, lang: targetLang };
     } catch (e) {
-        catNotify("🐱 [Beta] 에러: " + e.message, "error");
+        catNotify("🐱 에러: " + e.message, "error");
         return null;
     }
 }
@@ -166,60 +158,46 @@ async function processMessage(id, isInput = false) {
     const msg = stContext.chat[msgId];
     if (!msg) return;
     const btnIcon = $(`.mes[mesid="${msgId}"]`).find('.cat-mes-trans-btn .cat-emoji-icon');
-    
     if (btnIcon.hasClass('cat-glow-anim')) return;
     btnIcon.addClass('cat-glow-anim');
-    
     try {
         const mesBlock = $(`.mes[mesid="${msgId}"]`);
+        // 🎯 갓피티의 무적 타겟팅
         let editArea = mesBlock.find('textarea.edit_textarea:visible, textarea.mes_edit_textarea:visible, textarea:visible').first();
-        
         if (editArea.length > 0) {
             let currentText = editArea.val().trim();
             if (!currentText) return;
-
             let lastTranslated = editArea.data('cat-last-translated');
             let originalText = editArea.data('cat-original-text');
             let lastTargetLang = editArea.data('cat-last-target-lang');
-
             let isRetry = (lastTranslated && currentText === lastTranslated);
             let textToTranslate = isRetry ? originalText : currentText;
             let forceLang = isRetry ? lastTargetLang : null;
             let prevTrans = isRetry ? currentText : null;
 
-            catNotify(isRetry ? "🐱 [Beta] 재번역 중..." : "🐱 [Beta] 번역 중...", "success");
+            catNotify(isRetry ? "🐱 재번역 중..." : "🐱 번역 중...", "success");
             const transResult = await fetchTranslation(textToTranslate, forceLang, prevTrans);
-            
-            if (transResult && transResult.text !== currentText) {
+            if (transResult) {
                 const translated = transResult.text;
                 editArea.data('cat-original-text', textToTranslate);
                 editArea.data('cat-last-translated', translated);
                 editArea.data('cat-last-target-lang', transResult.lang);
-
                 const targetEl = editArea[0];
                 const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
-                if (nativeSetter) nativeSetter.call(targetEl, translated);
-                else targetEl.value = translated;
-                
+                if (nativeSetter) nativeSetter.call(targetEl, translated); else targetEl.value = translated;
                 editArea.val(translated);
                 targetEl.dispatchEvent(new Event('input', { bubbles: true }));
                 targetEl.dispatchEvent(new Event('change', { bubbles: true }));
-                catNotify("🎯 [Beta] 완료!", "success");
+                catNotify("🎯 완료!", "success");
             }
             return; 
         }
-
         let textToTranslate = isInput ? (msg.extra?.original_mes || msg.mes) : msg.mes;
         const transResult = await fetchTranslation(textToTranslate, (isInput ? "English" : null), (isInput ? (msg.extra?.original_mes ? msg.mes : null) : msg.extra?.display_text));
-        
         if (transResult && transResult.text !== textToTranslate) {
             if (!msg.extra) msg.extra = {};
-            if (isInput) { 
-                if(!msg.extra.original_mes) msg.extra.original_mes = textToTranslate; 
-                msg.mes = transResult.text; 
-            } else { 
-                msg.extra.display_text = transResult.text; 
-            }
+            if (isInput) { if(!msg.extra.original_mes) msg.extra.original_mes = textToTranslate; msg.mes = transResult.text; }
+            else { msg.extra.display_text = transResult.text; }
             stContext.updateMessageBlock(msgId, msg); 
         }
     } finally { btnIcon.removeClass('cat-glow-anim'); }
@@ -229,24 +207,20 @@ function revertMessage(id) {
     const msgId = parseInt(id, 10);
     const msg = stContext.chat[msgId];
     if (!msg) return;
-    
     let editArea = $(`.mes[mesid="${msgId}"]`).find('textarea.edit_textarea:visible, textarea.mes_edit_textarea:visible, textarea:visible').first();
     if (editArea.length > 0) {
         let originalText = editArea.data('cat-original-text');
         if (originalText) {
             const targetEl = editArea[0];
             const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
-            if (nativeSetter) nativeSetter.call(targetEl, originalText);
-            else targetEl.value = originalText;
+            if (nativeSetter) nativeSetter.call(targetEl, originalText); else targetEl.value = originalText;
             editArea.val(originalText);
             targetEl.dispatchEvent(new Event('input', { bubbles: true }));
-            catNotify("🐱 [Beta] 복구 완료!", "success");
-            editArea.removeData('cat-original-text');
-            editArea.removeData('cat-last-translated');
+            catNotify("🐱 복구 완료!", "success");
+            editArea.removeData('cat-original-text'); editArea.removeData('cat-last-translated');
         }
         return;
     }
-    
     if (msg.extra?.display_text) delete msg.extra.display_text;
     if (msg.extra?.original_mes) { msg.mes = msg.extra.original_mes; delete msg.extra.original_mes; }
     stContext.updateMessageBlock(msgId, msg);
@@ -254,8 +228,7 @@ function revertMessage(id) {
 
 function injectMessageButtons() {
     $('.mes:not(:has(.cat-btn-group))').each(function() {
-        const msgId = $(this).attr('mesid');
-        if (!msgId) return;
+        const msgId = $(this).attr('mesid'); if (!msgId) return;
         const isUser = $(this).hasClass('mes_user');
         const group = $(`<div class="cat-btn-group" style="display:inline-flex; gap:10px; margin-left:10px; align-items:center;"><span class="cat-mes-trans-btn" style="cursor:pointer; font-size:1.4em;"><span class="cat-emoji-icon">🐱</span></span><span class="cat-mes-revert-btn fa-solid fa-rotate-left" style="cursor:pointer; color:#ffb4a2;"></span></div>`);
         $(this).find('.name_text').append(group);
@@ -265,63 +238,35 @@ function injectMessageButtons() {
 }
 
 function injectInputButtons() {
-    if ($('#cat-input-btn').length > 0) {
-        const icon = $('#cat-input-btn .cat-emoji-icon');
-        if (isTranslatingInput) icon.addClass('cat-glow-anim'); else icon.removeClass('cat-glow-anim');
-        return; 
-    }
-    const target = $('#send_but');
-    if (target.length === 0) return;
+    if ($('#cat-input-btn').length > 0) return;
+    const target = $('#send_but'); if (target.length === 0) return;
     const catBtn = $(`<div id="cat-input-btn" title="번역" style="cursor:pointer; margin-right:2px; display:inline-flex; align-items:center; font-size:1.3em;"><span class="cat-emoji-icon">🐱</span></div>`);
     const revertBtn = $('<div id="cat-input-revert-btn" class="fa-solid fa-rotate-left" title="복구" style="cursor:pointer; margin-right:4px; color:#ffb4a2; opacity:0.6;"></div>');
     target.before(catBtn).before(revertBtn);
-    
     catBtn.on('click', async (e) => {
-        e.preventDefault();
-        const sendArea = $('#send_textarea');
-        let currentText = sendArea.val().trim();
+        e.preventDefault(); const sendArea = $('#send_textarea'); let currentText = sendArea.val().trim();
         if (isTranslatingInput || !currentText) return;
         isTranslatingInput = true; catBtn.find('.cat-emoji-icon').addClass('cat-glow-anim');
-        
         try {
-            let lastTranslated = sendArea.data('cat-last-translated');
-            let originalText = sendArea.data('cat-original-text');
+            let lastTranslated = sendArea.data('cat-last-translated'); let originalText = sendArea.data('cat-original-text');
             let lastTargetLang = sendArea.data('cat-last-target-lang');
-
             let isRetry = (lastTranslated && currentText === lastTranslated);
             let textToTranslate = isRetry ? originalText : currentText;
-            let forceLang = isRetry ? lastTargetLang : null;
-            let prevTrans = isRetry ? currentText : null;
-
-            catNotify(isRetry ? "🐱 [Beta] 입력창 재번역..." : "🐱 [Beta] 입력창 번역...", "success");
-            const transResult = await fetchTranslation(textToTranslate, forceLang, prevTrans);
-            
-            if (transResult && transResult.text !== currentText) { 
+            const transResult = await fetchTranslation(textToTranslate, (isRetry ? lastTargetLang : "English"), (isRetry ? currentText : null));
+            if (transResult) {
                 const translated = transResult.text;
-                sendArea.data('cat-original-text', textToTranslate);
-                sendArea.data('cat-last-translated', translated);
-                sendArea.data('cat-last-target-lang', transResult.lang);
-                
+                sendArea.data('cat-original-text', textToTranslate); sendArea.data('cat-last-translated', translated); sendArea.data('cat-last-target-lang', transResult.lang);
                 const targetEl = sendArea[0];
                 const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
                 if (setter) setter.call(targetEl, translated); else targetEl.value = translated;
                 sendArea.val(translated).trigger('input');
                 targetEl.dispatchEvent(new Event('input', { bubbles: true }));
             }
-        } finally { isTranslatingInput = false; $('#cat-input-btn .cat-emoji-icon').removeClass('cat-glow-anim'); }
+        } finally { isTranslatingInput = false; catBtn.find('.cat-emoji-icon').removeClass('cat-glow-anim'); }
     });
-    
-    revertBtn.on('click', (e) => { 
-        e.preventDefault(); 
-        const sendArea = $('#send_textarea');
-        let originalText = sendArea.data('cat-original-text');
-        if (originalText) { 
-            sendArea.val(originalText).trigger('input'); 
-            sendArea[0].dispatchEvent(new Event('input', { bubbles: true })); 
-            sendArea.removeData('cat-original-text');
-            sendArea.removeData('cat-last-translated');
-            catNotify("🐱 [Beta] 원본 복구!", "success");
-        } 
+    revertBtn.on('click', (e) => {
+        const sendArea = $('#send_textarea'); let original = sendArea.data('cat-original-text');
+        if (original) { sendArea.val(original).trigger('input'); sendArea[0].dispatchEvent(new Event('input', { bubbles: true })); catNotify("🐱 원본 복구!"); }
     });
 }
 
@@ -331,42 +276,61 @@ function setupUI() {
     let pOpt = ''; (stContext.extensionSettings?.connectionManager?.profiles || []).forEach(p => { pOpt += `<option value="${p.id}">${p.name}</option>`; });
     const uiHtml = `
         <div id="cat-trans-container" class="inline-drawer cat-native-font">
-            <div id="cat-drawer-header" class="inline-drawer-header interactable" tabindex="0">
+            <div id="cat-drawer-header" class="inline-drawer-header interactable">
                 <div class="inline-drawer-title cat-native-font">🐱 <span>트랜스레이터 (Beta)</span></div>
                 <i id="cat-drawer-toggle" class="inline-drawer-toggle fa-solid fa-chevron-down"></i>
             </div>
             <div id="cat-drawer-content" class="inline-drawer-content" style="display: none; padding: 10px;">
-                <div class="cat-setting-row cat-native-font"><label>연결 프로필</label><select id="ct-profile" class="text_pole cat-native-font"><option value="">⚡ 직접 연결 모드</option>${pOpt}</select></div>
+                <div class="cat-setting-row"><label>연결 프로필</label><select id="ct-profile" class="text_pole">${pOpt ? pOpt : '<option value="">프로필 없음</option>'}</select></div>
                 <div id="direct-mode-settings" style="display: ${settings.profile === '' ? 'block' : 'none'};">
-                    <div class="cat-setting-row cat-native-font"><label>API Key</label><input type="password" id="ct-key" class="text_pole cat-native-font" value="${settings.customKey}"></div>
-                    <div class="cat-setting-row cat-native-font"><label>모델</label><select id="ct-model" class="text_pole cat-native-font">
-                        <option value="gemini-1.5-flash">Gemini 1.5 Flash</option><option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
-                        <option value="gemini-2.0-flash">Gemini 2.0 Flash</option><option value="gemini-2.0-pro-exp-02-05">Gemini 2.0 Pro Exp</option>
+                    <div class="cat-setting-row"><label>API Key</label>
+                        <div class="cat-key-wrapper">
+                            <input type="password" id="ct-key" class="text_pole" value="${settings.customKey}">
+                            <span id="ct-key-eye" class="ct-key-toggle fa-solid fa-eye"></span>
+                        </div>
+                    </div>
+                    <div class="cat-setting-row"><label>모델</label><select id="ct-model" class="text_pole">
+                        <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+                        <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+                        <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+                        <option value="gemini-2.0-pro-exp-02-05">Gemini 2.0 Pro Exp (2/5)</option>
                     </select></div>
                 </div>
-                <div class="cat-setting-row cat-native-font"><label>자동 모드</label><select id="ct-auto-mode" class="text_pole cat-native-font"><option value="none">꺼짐</option><option value="input">입력만</option><option value="output">출력만</option><option value="both">둘 다</option></select></div>
-                <div class="cat-setting-row cat-native-font"><label>목표 언어 (AI 기본)</label><select id="ct-lang" class="text_pole cat-native-font">
-                    <option value="Korean">Korean</option><option value="English">English</option><option value="Japanese">Japanese</option>
+                <div class="cat-setting-row"><label>자동 모드</label><select id="ct-auto-mode" class="text_pole"><option value="none">꺼짐</option><option value="input">입력만</option><option value="output">출력만</option><option value="both">둘 다</option></select></div>
+                <div class="cat-setting-row"><label>목표 언어</label><select id="ct-lang" class="text_pole">
+                    <option value="Korean">Korean (한국어)</option>
+                    <option value="English">English (영어)</option>
+                    <option value="Japanese">Japanese (일본어)</option>
+                    <option value="Chinese">Chinese (중국어)</option>
+                    <option value="German">German (독일어)</option>
+                    <option value="Russian">Russian (러시아어)</option>
                 </select></div>
-                <div class="cat-setting-row cat-native-font"><label>번역 프롬프트</label><textarea id="ct-prompt" class="text_pole cat-native-font" rows="4">${settings.prompt}</textarea></div>
-                <div class="cat-setting-row cat-native-font"><label>사전 (A=B)</label><textarea id="ct-dictionary" class="text_pole cat-native-font" rows="3">${settings.dictionary}</textarea></div>
-                <button id="cat-save-btn" class="menu_button cat-native-font" style="margin-top: 5px;">설정 저장 🐱</button>
+                <div class="cat-setting-row"><label>번역 프롬프트</label><textarea id="ct-prompt" class="text_pole" rows="3">${settings.prompt}</textarea></div>
+                <div class="cat-setting-row"><label>사전 (A=B)</label><textarea id="ct-dictionary" class="text_pole" rows="2">${settings.dictionary}</textarea></div>
+                <button id="cat-save-btn" class="menu_button">설정 저장 🐱</button>
             </div>
         </div>`;
     $('#extensions_settings').append(uiHtml);
-    $('#cat-drawer-header').on('click', function() { $('#cat-drawer-content').slideToggle(200); $('#cat-drawer-toggle').toggleClass('fa-chevron-down fa-chevron-up'); });
-    $('#cat-save-btn').on('click', function() { saveSettings(); catNotify("🐱 [Beta] 설정 저장 완료!"); });
+    $('#cat-drawer-header').on('click', () => { $('#cat-drawer-content').slideToggle(200); $('#cat-drawer-toggle').toggleClass('fa-chevron-down fa-chevron-up'); });
+    $('#cat-save-btn').on('click', () => { saveSettings(); catNotify("🐱 설정 저장 완료!"); });
+    
+    // 👁️ API 키 보기 토글 로직
+    $('#ct-key-eye').on('click', function() {
+        const input = $('#ct-key');
+        const type = input.attr('type') === 'password' ? 'text' : 'password';
+        input.attr('type', type);
+        $(this).toggleClass('fa-eye fa-eye-slash');
+    });
+
     $('#ct-profile').val(settings.profile).on('change', function() { settings.profile = $(this).val(); $('#direct-mode-settings').toggle(settings.profile === ''); saveSettings(); });
     $('#ct-key').on('input', function() { settings.customKey = $(this).val(); });
     $('#ct-model').val(settings.directModel).on('change', function() { settings.directModel = $(this).val(); saveSettings(); });
     $('#ct-auto-mode').val(settings.autoMode).on('change', function() { settings.autoMode = $(this).val(); saveSettings(); });
     $('#ct-lang').val(settings.targetLang).on('change', function() { settings.targetLang = $(this).val(); saveSettings(); });
-    $('#ct-dictionary').on('input', function() { settings.dictionary = $(this).val(); });
 }
 
 jQuery(() => {
-    setupUI();
-    setInterval(() => { injectInputButtons(); injectMessageButtons(); }, 250);
+    setupUI(); setInterval(() => { injectInputButtons(); injectMessageButtons(); }, 500);
     stContext.eventSource.on(stContext.event_types.CHARACTER_MESSAGE_RENDERED, (d) => {
         if (settings.autoMode === 'none' || settings.autoMode === 'input') return;
         processMessage(typeof d === 'object' ? d.messageId : d, false);
