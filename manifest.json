@@ -4,5 +4,5 @@
     "version": "17.7.0-beta",
     "description": "안전한 주말 대수술을 위한 베타 테스트 환경",
     "author": "냥헴 & GPT",
-    "js": "index.js",
-  
+    "js": "index.js"
+}
