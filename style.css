@@ -1,38 +1,19 @@
 .cat-native-font { font-family: var(--smart-font, 'Noto Sans', 'Segoe UI', sans-serif) !important; }
 .cat-setting-row { margin-bottom: 10px; }
 .cat-setting-row > label { display: block; font-size: 0.9em; font-weight: bold; margin-bottom: 4px; }
+.cat-key-wrapper { position: relative; display: flex; align-items: center; width: 100%; }
+.ct-key-toggle-paw { position: absolute; right: 10px; cursor: pointer; font-size: 1.2em; z-index: 5; transition: 0.2s; }
+.ct-key-toggle-paw:hover { transform: scale(1.2) rotate(-10deg); }
 
-/* 📱 모바일 터치 타겟을 위해 버튼 크기 조정 */
-.cat-btn-group { 
-    display: inline-flex; 
-    gap: 12px; 
-    margin-left: 10px; 
-    align-items: center; 
-    vertical-align: middle;
-}
-.cat-mes-trans-btn { cursor: pointer; font-size: 1.5em; padding: 4px; }
-.cat-mes-revert-btn { cursor: pointer; color: #ffb4a2; opacity: 0.6; font-size: 1.1em; padding: 4px; }
+.cat-btn-group { display: inline-flex; gap: 12px; margin-left: 10px; align-items: center; vertical-align: middle; }
+.cat-mes-trans-btn { cursor: pointer; font-size: 1.5em; }
+.cat-mes-revert-btn { cursor: pointer; color: #ffb4a2; opacity: 0.6; font-size: 1.1em; }
 
-/* ✨ 애니메이션 */
-.cat-glow-anim { animation: cat-calm-pulse 1.5s infinite alternate ease-in-out; }
-@keyframes cat-calm-pulse {
-    from { transform: scale(1); filter: drop-shadow(0 0 2px orange); }
-    to { transform: scale(1.3); filter: drop-shadow(0 0 10px orange); }
-}
+.cat-btn-abort { background: rgba(231, 76, 60, 0.4) !important; border-color: #e74c3c !important; animation: cat-panic 1s infinite alternate; }
+@keyframes cat-panic { from { box-shadow: 0 0 2px red; } to { box-shadow: 0 0 10px red; } }
 
-/* 💊 모바일 알림창 (중앙 하단으로 배치) */
-.cat-notification { 
-    position: fixed; 
-    bottom: -80px; 
-    left: 50%; 
-    transform: translateX(-50%); 
-    padding: 15px 30px; 
-    border-radius: 40px; 
-    color: white; 
-    font-weight: bold; 
-    z-index: 99999; 
-    transition: bottom 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); 
-    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
-    background: #2ecc71;
-}
+.cat-glow-anim { animation: cat-glow 1.5s infinite alternate ease-in-out; }
+@keyframes cat-glow { from { transform: scale(1); filter: drop-shadow(0 0 2px orange); } to { transform: scale(1.3); filter: drop-shadow(0 0 10px orange); } }
+
+.cat-notification { position: fixed; bottom: -80px; left: 50%; transform: translateX(-50%); padding: 15px 30px; border-radius: 40px; color: white; font-weight: bold; z-index: 99999; transition: bottom 0.5s; background: #2ecc71; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
 .cat-notification.show { bottom: 40px; }
