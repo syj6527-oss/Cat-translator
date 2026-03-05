@@ -1,6 +1,6 @@
-import { extension_settings, getContext } from '../../../../scripts/extensions.js';
-import { secret_state, SECRET_KEYS } from '../../../../scripts/secrets.js';
-import { callGenericPopup, POPUP_TYPE } from '../../../../scripts/utils.js';
+import { extension_settings, getContext } from '../../../extensions.js';
+import { secret_state, SECRET_KEYS } from '../../../secrets.js';
+import { callGenericPopup, POPUP_TYPE } from '../../../utils.js';
 
 const extName = "cat-translator-beta";
 const stContext = getContext();
