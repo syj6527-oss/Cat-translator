@@ -1,4 +1,4 @@
-console.log("CAT TRANSLATOR LOADED");
+console.log("CAT TRANSLATOR BETA LOADED");
 
 import { extension_settings, getContext } from '../../../extensions.js';
 import { secret_state, SECRET_KEYS } from '../../../secrets.js';
