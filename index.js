@@ -7,7 +7,7 @@ const stContext = getContext();
 let translationCache = {};
 let isTranslatingInput = false;
 
-// 💊 알약 알림창 (최상단 고정)
+// 💊 알림창 (최상단 노출)
 function catNotify(message, type = 'success') {
     $('.cat-notification').remove();
     const bgColor = type === 'success' ? '#2ecc71' : (type === 'warning' ? '#f1c40f' : '#e74c3c');
@@ -76,7 +76,7 @@ function applyPreReplace(text, isToEnglish) {
     return processedText;
 }
 
-// 🚀 번역 요청 API
+// 🚀 스마트 번역 API
 async function fetchTranslation(text, forceLang = null, prevTranslation = null) {
     if (!text || text.trim() === "") return null;
     
@@ -91,7 +91,7 @@ async function fetchTranslation(text, forceLang = null, prevTranslation = null) 
 
     const targetLang = isToEnglish ? "English" : settings.targetLang;
     
-    // 🧠 [v17.9.0] 캐시 시스템 및 토큰 알림 (절약 모드)
+    // 🧠 캐시 시스템 및 토큰 알림
     const cacheKey = `${targetLang}_${text.trim()}`;
     if (!prevTranslation && translationCache[cacheKey]) {
         catNotify("🐱 캐시 사용: 토큰을 아꼈습니다!", "success");
@@ -120,30 +120,33 @@ NO EXPLANATIONS. NO ALTERNATIVES. NO CONVERSATIONAL FILLER.`;
             const apiKey = settings.customKey || secret_state[SECRET_KEYS.MAKERSUITE];
             if (!apiKey) { catNotify("🐱 [Beta] API 키 없음!", "error"); return null; }
             
-            // 🎯 404 에러 방지를 위한 모델 이름 정밀 정합성 체크
+            // 🎯 404 방어: 모델 이름 정제
             let modelId = settings.directModel || "gemini-1.5-flash";
             if (modelId.startsWith('models/')) modelId = modelId.substring(7);
             
-            // 지수 백오프 재시도 로직
-            const tryFetch = async (retries = 3) => {
-                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{ role: "user", parts: [{ text: promptWithText }] }],
-                        generationConfig: { temperature: 0.0, maxOutputTokens: 8192 }
-                    })
-                });
-                
-                if (!response.ok) {
-                    if (response.status === 404 && retries > 0) return await tryFetch(retries - 1);
-                    const errorData = await response.json();
-                    throw new Error(errorData.error?.message || "네트워크 오류");
-                }
-                return await response.json();
-            };
+            // 🎯 124줄: 무적의 fetch 로직 (코드 잘림 원천 봉쇄)
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
             
-            const data = await tryFetch();
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    contents: [{ role: "user", parts: [{ text: promptWithText }] }],
+                    generationConfig: { 
+                        temperature: 0.0, 
+                        maxOutputTokens: 8192 
+                    }
+                })
+            });
+            
+            if (!response.ok) {
+                const errData = await response.json();
+                throw new Error(errData.error?.message || "HTTP Error " + response.status);
+            }
+
+            const data = await response.json();
             const parts = data.candidates?.[0]?.content?.parts || [];
             const actualPart = parts.find(p => !p.thought) || parts[parts.length - 1]; 
             result = actualPart?.text?.trim() || "";
@@ -169,8 +172,6 @@ async function processMessage(id, isInput = false) {
     
     try {
         const mesBlock = $(`.mes[mesid="${msgId}"]`);
-        
-        // 🎯 갓피티의 절대 타겟팅 (수정창)
         let editArea = mesBlock.find('textarea.edit_textarea:visible, textarea.mes_edit_textarea:visible, textarea:visible').first();
         
         if (editArea.length > 0) {
@@ -186,8 +187,7 @@ async function processMessage(id, isInput = false) {
             let forceLang = isRetry ? lastTargetLang : null;
             let prevTrans = isRetry ? currentText : null;
 
-            catNotify(isRetry ? "🐱 [Beta] 다른 표현 찾는 중..." : "🐱 [Beta] 번역 중...", "success");
-            
+            catNotify(isRetry ? "🐱 [Beta] 재번역 중..." : "🐱 [Beta] 번역 중...", "success");
             const transResult = await fetchTranslation(textToTranslate, forceLang, prevTrans);
             
             if (transResult && transResult.text !== currentText) {
@@ -204,7 +204,7 @@ async function processMessage(id, isInput = false) {
                 editArea.val(translated);
                 targetEl.dispatchEvent(new Event('input', { bubbles: true }));
                 targetEl.dispatchEvent(new Event('change', { bubbles: true }));
-                catNotify("🎯 [Beta] 번역 완료!", "success");
+                catNotify("🎯 [Beta] 완료!", "success");
             }
             return; 
         }
@@ -293,8 +293,7 @@ function injectInputButtons() {
             let forceLang = isRetry ? lastTargetLang : null;
             let prevTrans = isRetry ? currentText : null;
 
-            catNotify(isRetry ? "🐱 [Beta] 입력창 재번역 중..." : "🐱 [Beta] 입력창 번역 중...", "success");
-            
+            catNotify(isRetry ? "🐱 [Beta] 입력창 재번역..." : "🐱 [Beta] 입력창 번역...", "success");
             const transResult = await fetchTranslation(textToTranslate, forceLang, prevTrans);
             
             if (transResult && transResult.text !== currentText) { 
@@ -355,7 +354,7 @@ function setupUI() {
             </div>
         </div>`;
     $('#extensions_settings').append(uiHtml);
-    $('#cat-drawer-header').on('click', function(e) { e.stopPropagation(); $('#cat-drawer-content').slideToggle(200); $('#cat-drawer-toggle').toggleClass('fa-chevron-down fa-chevron-up'); });
+    $('#cat-drawer-header').on('click', function() { $('#cat-drawer-content').slideToggle(200); $('#cat-drawer-toggle').toggleClass('fa-chevron-down fa-chevron-up'); });
     $('#cat-save-btn').on('click', function() { saveSettings(); catNotify("🐱 [Beta] 설정 저장 완료!"); });
     $('#ct-profile').val(settings.profile).on('change', function() { settings.profile = $(this).val(); $('#direct-mode-settings').toggle(settings.profile === ''); saveSettings(); });
     $('#ct-key').on('input', function() { settings.customKey = $(this).val(); });
