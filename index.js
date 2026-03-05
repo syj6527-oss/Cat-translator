@@ -5,11 +5,13 @@ import { callGenericPopup, POPUP_TYPE } from '../../../../scripts/utils.js';
 const extName = "cat-translator-beta";
 const stContext = getContext();
 
+// 🚦 상태 관리 (가져온 아이디어 적용)
 let isChatTranslationInProgress = false;
 let isTranslateChatCanceled = false;
 const translationInProgress = {};
+let translationCache = {};
 
-// 💊 알림창 (모바일 화면에 맞춰 조금 더 크게)
+// 💊 알약 알림창 (모바일 대응 하단 배치)
 function catNotify(message, type = 'success') {
     $('.cat-notification').remove();
     const bgColor = type === 'success' ? '#2ecc71' : (type === 'warning' ? '#f1c40f' : '#e74c3c');
@@ -25,7 +27,9 @@ function catNotify(message, type = 'success') {
 const defaultSettings = {
     customKey: '',
     directModel: 'gemini-1.5-flash',
-    targetLang: 'Korean'
+    targetLang: 'Korean',
+    temperature: 0.2, // 창의성
+    maxTokens: 2048   // 최대 길이
 };
 
 let settings = Object.assign({}, defaultSettings, extension_settings[extName]);
@@ -38,11 +42,33 @@ function saveSettings() {
     stContext.saveSettingsDebounced();
 }
 
+// 🧺 세탁기 함수 (보내주신 정규식 반영!)
+function cleanResult(text) {
+    if (!text) return "";
+    return text
+        .replace(/```[a-z]*\n?/gi, "") // 코드 블록 제거
+        .replace(/```/g, "")
+        .replace(/^(번역|Translation|Output):\s*/gi, "")
+        .replace(/^\s*/gi, "") // 보내주신 코드: 앞 공백 제거
+        .trim();               // 보내주신 코드: 양끝 공백 제거
+}
+
+// 🚀 스마트 번역 API (404 완치 및 파라미터 적용)
 async function fetchTranslation(text) {
     if (!text || text.trim() === "") return null;
+    const isToEnglish = ((text.match(/[가-힣]/g) || []).length >= (text.match(/[a-zA-Z]/g) || []).length);
+    const targetLang = isToEnglish ? "English" : settings.targetLang;
+    
+    // 💰 토큰 아낌 알림
+    const cacheKey = `${targetLang}_${text.trim()}`;
+    if (translationCache[cacheKey]) {
+        catNotify("🐱 캐시 사용: 토큰을 아꼈습니다!");
+        return translationCache[cacheKey];
+    }
+
     try {
         const apiKey = settings.customKey || secret_state[SECRET_KEYS.MAKERSUITE];
-        if (!apiKey) return null;
+        if (!apiKey) throw new Error("API Key Missing");
         
         let modelId = settings.directModel;
         if (modelId.startsWith('models/')) modelId = modelId.substring(7);
@@ -52,20 +78,39 @@ async function fetchTranslation(text) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                contents: [{ role: "user", parts: [{ text: `Translate to ${settings.targetLang}. Return ONLY translated text.\n\n${text}` }] }],
-                generationConfig: { temperature: 0.2, maxOutputTokens: 2048 }
+                contents: [{ role: "user", parts: [{ text: `Translate to ${targetLang}. Output ONLY raw text.\n\n${text}` }] }],
+                generationConfig: { 
+                    temperature: settings.temperature, 
+                    maxOutputTokens: settings.maxTokens 
+                },
+                // 🛡️ 후기에서 본 "API 오류" 방지를 위한 안전 설정 해제
+                safetySettings: [
+                    { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+                    { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+                    { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+                    { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+                ]
             })
         });
         
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.error?.message || "HTTP " + response.status);
+        }
         const data = await response.json();
-        return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
-    } catch (e) { return null; }
+        const result = cleanResult(data.candidates?.[0]?.content?.parts?.[0]?.text) || text;
+        
+        if (result !== text) translationCache[cacheKey] = result;
+        return result;
+    } catch (e) {
+        console.error("🐱 API Error:", e);
+        return null;
+    }
 }
 
 async function processMessage(id) {
     const msgId = parseInt(id, 10);
     if (translationInProgress[msgId]) return;
-    
     const msg = stContext.chat[msgId];
     if (!msg) return;
 
@@ -76,7 +121,6 @@ async function processMessage(id) {
     try {
         let textToTranslate = msg.extra?.original_mes || msg.mes;
         const resText = await fetchTranslation(textToTranslate);
-        
         if (resText) {
             if (!msg.extra) msg.extra = {};
             msg.extra.original_mes = textToTranslate;
@@ -89,22 +133,56 @@ async function processMessage(id) {
     }
 }
 
-// 🐾 버튼 주입 (중복 방지 로직 강화)
+// 🧹 일괄 삭제 (가져온 아이디어)
+async function onClearAll() {
+    const confirm = await callGenericPopup('🐱 모든 번역을 지울까냥?', POPUP_TYPE.CONFIRM);
+    if (!confirm) return;
+    for (let i = 0; i < stContext.chat.length; i++) {
+        const m = stContext.chat[i];
+        if (m.extra?.display_text) {
+            delete m.extra.display_text;
+            stContext.updateMessageBlock(i, m);
+            if (i % 10 === 0) await new Promise(r => setTimeout(r, 10));
+        }
+    }
+    translationCache = {};
+    catNotify("🐱 원본으로 복구 완료!");
+}
+
+// 🌍 전체 번역 (가져온 아이디어 + 중단 로직)
+async function onBatchTranslate() {
+    if (isChatTranslationInProgress) {
+        isTranslateChatCanceled = true;
+        return;
+    }
+    const confirm = await callGenericPopup('🐱 전체 채팅 번역을 시작할까냥?', POPUP_TYPE.CONFIRM);
+    if (!confirm) return;
+
+    isChatTranslationInProgress = true;
+    isTranslateChatCanceled = false;
+    $('#cat-batch-btn').text('중단🐾').addClass('cat-btn-abort');
+
+    try {
+        for (let i = 0; i < stContext.chat.length; i++) {
+            if (isTranslateChatCanceled) break;
+            const msg = stContext.chat[i];
+            if (msg.extra?.display_text || msg.extra?.original_mes) continue;
+            await processMessage(i);
+            await new Promise(r => setTimeout(r, 400));
+        }
+        catNotify(isTranslateChatCanceled ? "🐱 중단됨!" : "🐱 전체 번역 완료!");
+    } finally {
+        isChatTranslationInProgress = false;
+        $('#cat-batch-btn').text('전체 번역 🌍').removeClass('cat-btn-abort');
+    }
+}
+
 function injectButtons() {
     $('.mes:not(:has(.cat-btn-group))').each(function() {
         const msgId = $(this).attr('mesid');
         if (!msgId) return;
-        
-        const group = $(`
-            <div class="cat-btn-group">
-                <span class="cat-mes-trans-btn" title="번역"><span class="cat-emoji-icon">🐱</span></span>
-                <span class="cat-mes-revert-btn fa-solid fa-rotate-left" title="복구"></span>
-            </div>
-        `);
-        
-        // 모바일은 이름 옆 공간이 좁을 수 있어 이름 텍스트 뒤에 바로 붙임
+        const group = $(`<div class="cat-btn-group"><span class="cat-mes-trans-btn" title="번역"><span class="cat-emoji-icon">🐱</span></span><span class="cat-mes-revert-btn fa-solid fa-rotate-left" title="복구"></span></div>`);
         $(this).find('.name_text').first().append(group);
-        
         group.find('.cat-mes-trans-btn').on('click', (e) => { e.stopPropagation(); processMessage(msgId); });
         group.find('.cat-mes-revert-btn').on('click', (e) => {
             e.stopPropagation();
@@ -120,56 +198,40 @@ function setupUI() {
     const uiHtml = `
         <div id="cat-trans-container" class="inline-drawer cat-native-font">
             <div id="cat-drawer-header" class="inline-drawer-header interactable">
-                <div class="inline-drawer-title">🐱 <span>트랜스레이터 (Mobile)</span></div>
+                <div class="inline-drawer-title">🐱 <span>트랜스레이터 (v18.7)</span></div>
                 <i id="cat-drawer-toggle" class="inline-drawer-toggle fa-solid fa-chevron-down"></i>
             </div>
             <div id="cat-drawer-content" class="inline-drawer-content" style="display: none; padding: 10px;">
-                <div class="cat-setting-row"><label>API Key</label><input type="password" id="ct-key" class="text_pole" value="${settings.customKey}"></div>
-                <div class="cat-setting-row"><label>목표 언어</label><select id="ct-lang" class="text_pole">
-                    <option value="Korean">Korean</option><option value="English">English</option>
-                </select></div>
+                <div class="cat-setting-row"><label>API Key</label>
+                    <div class="cat-key-wrapper">
+                        <input type="password" id="ct-key" class="text_pole" value="${settings.customKey}">
+                        <span id="ct-key-paw" class="ct-key-toggle-paw">🐾</span>
+                    </div>
+                </div>
                 <div class="cat-batch-group" style="display:flex; gap:5px; margin-top:10px;">
                     <button id="cat-batch-btn" class="menu_button" style="flex:2;">전체 번역 🌍</button>
                     <button id="cat-clear-btn" class="menu_button" style="flex:1;">삭제 🧹</button>
                 </div>
                 <button id="cat-save-btn" class="menu_button" style="margin-top:10px; width:100%;">설정 저장 🐱</button>
+                <div style="font-size: 0.7em; opacity: 0.3; text-align: center; margin-top: 5px;">v18.7.0-beta 커뮤니티 스타 에디션</div>
             </div>
         </div>`;
     $('#extensions_settings').append(uiHtml);
     $('#cat-drawer-header').on('click', () => $('#cat-drawer-content').slideToggle(200));
     $('#cat-save-btn').on('click', () => { saveSettings(); catNotify("🐱 설정 저장!"); });
-    
-    $('#cat-batch-btn').on('click', async () => {
-        const confirm = await callGenericPopup('🐱 전체 번역할까냥?', POPUP_TYPE.CONFIRM);
-        if (!confirm) return;
-        catNotify("🐱 전체 번역 시작!");
-        for (let i = 0; i < stContext.chat.length; i++) {
-            await processMessage(i);
-            await new Promise(r => setTimeout(r, 400));
-        }
-    });
-
-    $('#cat-clear-btn').on('click', async () => {
-        const confirm = await callGenericPopup('🐱 번역을 지울까냥?', POPUP_TYPE.CONFIRM);
-        if (!confirm) return;
-        stContext.chat.forEach((m, idx) => {
-            if (m.extra?.display_text) { delete m.extra.display_text; stContext.updateMessageBlock(idx, m); }
-        });
-        catNotify("🐱 삭제 완료!");
+    $('#cat-batch-btn').on('click', onBatchTranslate);
+    $('#cat-clear-btn').on('click', onClearAll);
+    $('#ct-key-paw').on('click', function() {
+        const input = $('#ct-key');
+        input.attr('type', input.attr('type') === 'password' ? 'text' : 'password');
     });
 }
 
 jQuery(() => {
     setupUI();
     injectButtons();
-
-    // 🕵️ MutationObserver: 화면이 바뀔 때마다 버튼 주입 (모바일 필수)
-    const observer = new MutationObserver(() => {
-        injectButtons();
-    });
-
+    // 모바일/데스크탑 통합 감시 엔진 (MutationObserver)
+    const observer = new MutationObserver(() => injectButtons());
     const chatBody = document.getElementById('chat');
-    if (chatBody) {
-        observer.observe(chatBody, { childList: true, subtree: true });
-    }
+    if (chatBody) observer.observe(chatBody, { childList: true, subtree: true });
 });
