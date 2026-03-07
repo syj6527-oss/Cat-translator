@@ -6,15 +6,15 @@ const stContext = getContext();
 
 let isTranslatingInput = false;
 
-// ── 💾 IndexedDB (영구 캐시 & 무제한 사전 DB) ──
+// ── 💾 IndexedDB (영구 캐시 전용) ──
 let db = null;
 const initDB = async () => {
     return new Promise((resolve) => {
         const request = indexedDB.open("CatTranslatorDB_Beta", 1);
         request.onupgradeneeded = (e) => {
             const database = e.target.result;
+            // 번역 기록(토큰 절약용)만 DB에 저장합니다.
             if (!database.objectStoreNames.contains("cache")) database.createObjectStore("cache", { keyPath: "id" });
-            if (!database.objectStoreNames.contains("dict")) database.createObjectStore("dict", { keyPath: "o" }); 
         };
         request.onsuccess = (e) => { db = e.target.result; resolve(db); };
         request.onerror = () => resolve(null);
@@ -32,21 +32,13 @@ const dbPut = (data) => new Promise(r => {
     const req = db.transaction(["cache"], "readwrite").objectStore("cache").put(data);
     req.onsuccess = () => r(true);
 });
-
-// 무제한 사전(dict) 제어
-const dbGetAllDict = () => new Promise(r => {
-    if(!db || !db.objectStoreNames.contains("dict")) return r([]);
-    const req = db.transaction(["dict"], "readonly").objectStore("dict").getAll();
-    req.onsuccess = () => r(req.result);
-    req.onerror = () => r([]);
-});
-const dbPutDict = (data) => new Promise(r => {
-    if(!db || !db.objectStoreNames.contains("dict")) return r(false);
-    const req = db.transaction(["dict"], "readwrite").objectStore("dict").put(data);
-    req.onsuccess = () => r(true);
+const dbClearAll = () => new Promise(r => {
+    if (!db) return r(false);
+    db.transaction(["cache"], "readwrite").objectStore("cache").clear();
+    r(true);
 });
 
-// 💊 알림창
+// 💊 알림창 (순정)
 function catNotify(message, type = 'success') {
     $('.cat-notification').remove();
     const bgColor = type === 'success' ? '#2ecc71' : (type === 'warning' ? '#f1c40f' : '#e74c3c');
@@ -86,49 +78,44 @@ function saveSettings() {
     stContext.saveSettingsDebounced();
 }
 
+// 🧼 냥헴의 세탁기 강화 (핑퐁 방지 + 공백 박멸)
 function cleanResult(text) {
     if (!text) return "";
     return text
-        .replace(/```[a-z]*\n?/gi, "") // 찌꺼기 방어
+        .replace(/```[a-z]*\n?/gi, "") 
         .replace(/```/g, "")
+        .replace(/^Input:.*?\nOutput:\s*/is, "") // AI가 원문을 같이 뱉어내는 핑퐁 현상 완벽 사살!
         .replace(/^(번역|Translation|Output):\s*/gi, "")
         .replace(/\{+(.*?)\}+/g, "$1") 
-        .replace(/^\s*/gi, "") // 💖 마스터의 공백 세탁기!
+        .replace(/^\s*/gi, "") // 💖 마스터 정규식!
         .trim();
 }
 
-// 📚 DB가 결합된 강력한 사전 엔진
-async function applyPreReplace(text, isToEnglish) {
-    if (!text) return text;
-    
-    // 1. UI 텍스트박스 사전 파싱
-    let uiDictLines = (settings.dictionary || "").split('\n').filter(l => l.includes('=')).map(l => {
-        let parts = l.split('=');
-        return { o: parts[0].trim(), t: parts[1].trim() };
-    });
-
-    // 2. IndexedDB 영구 사전 불러오기
-    const dbDict = await dbGetAllDict();
-    
-    // 3. 두 사전 병합
-    let combinedDict = [...uiDictLines, ...dbDict];
-    if (combinedDict.length === 0) return text;
+// 📚 사전 치환 (UI 텍스트박스 기반)
+function applyPreReplace(text, isToEnglish) {
+    if (!settings.dictionary || settings.dictionary.trim() === "") return text;
+    let dictLines = settings.dictionary.split('\n').filter(l => l.includes('='));
+    if (dictLines.length === 0) return text;
 
     let processedText = text;
-    combinedDict.sort((a, b) => b.o.length - a.o.length);
+    dictLines.sort((a, b) => b.split('=')[0].length - a.split('=')[0].length);
 
-    combinedDict.forEach(d => {
-        let searchStr = isToEnglish ? d.t : d.o;
-        let replaceStr = isToEnglish ? d.o : d.t;
-        if (searchStr && replaceStr) {
-            let escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            processedText = processedText.replace(new RegExp(escapeRegExp(searchStr), 'gi'), replaceStr);
+    dictLines.forEach(line => {
+        let parts = line.split('=');
+        if (parts.length === 2) {
+            let orig = parts[0].trim(), trans = parts[1].trim();
+            let searchStr = isToEnglish ? trans : orig;
+            let replaceStr = isToEnglish ? orig : trans;
+            if (searchStr && replaceStr) {
+                let escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                processedText = processedText.replace(new RegExp(escapeRegExp(searchStr), 'gi'), replaceStr);
+            }
         }
     });
     return processedText;
 }
 
-// 🚀 스마트 번역 API (재번역 파라미터 + DB 캐시 추가)
+// 🚀 스마트 번역 API (순정 로직 기반 + DB 캐시 적용)
 async function fetchTranslation(text, forceLang = null, prevTranslation = null) {
     if (!text || text.trim() === "") return null;
     
@@ -153,9 +140,10 @@ async function fetchTranslation(text, forceLang = null, prevTranslation = null) 
         }
     }
     
-    let preReplacedText = await applyPreReplace(text.trim(), isToEnglish);
+    // 사전 치환
+    let preReplacedText = applyPreReplace(text.trim(), isToEnglish);
     
-    const STRICT_DIRECTIVE = `[CRITICAL DIRECTIVE]\nYOU ARE A MACHINE. RETURN ONLY THE RAW TRANSLATED TEXT.\nNO EXPLANATIONS. NO ALTERNATIVES. NO CONVERSATIONAL FILLER.`;
+    const STRICT_DIRECTIVE = `[CRITICAL DIRECTIVE]\nYOU ARE A MACHINE. RETURN ONLY THE RAW TRANSLATED TEXT.\nDO NOT OUTPUT THE ORIGINAL TEXT. NO EXPLANATIONS. NO ALTERNATIVES.`;
 
     let basePrompt = isToEnglish 
         ? `Translate to English.\n${STRICT_DIRECTIVE}`
@@ -200,11 +188,11 @@ async function fetchTranslation(text, forceLang = null, prevTranslation = null) 
         
         const finalResult = cleanResult(result) || text;
         
-        // 💾 번역 결과 DB 저장
+        // 💾 DB에 번역 결과 저장
         if (finalResult !== text && !prevTranslation) {
             await dbPut({ id: cacheKey, translation: finalResult });
         }
-        
+
         return { text: finalResult, lang: targetLang };
     } catch (e) {
         catNotify("🐱 에러: " + e.message, "error");
@@ -212,6 +200,7 @@ async function fetchTranslation(text, forceLang = null, prevTranslation = null) 
     }
 }
 
+// 💬 메시지 처리 (순정 로직 완벽 유지 - 마스터님의 수정창 번역 100% 작동)
 async function processMessage(id, isInput = false) {
     const msgId = parseInt(id, 10);
     const msg = stContext.chat[msgId];
@@ -224,7 +213,7 @@ async function processMessage(id, isInput = false) {
     try {
         const mesBlock = $(`.mes[mesid="${msgId}"]`);
         
-        // 🎯 갓피티의 절대 타겟팅 (기존 코드 유지)
+        // 🎯 갓피티(마스터)의 절대 타겟팅 - 수정창 번역 순정 유지!
         let editArea = mesBlock.find('textarea.edit_textarea:visible, textarea.mes_edit_textarea:visible, textarea:visible').first();
         
         if (editArea.length > 0) {
@@ -323,61 +312,6 @@ function injectMessageButtons() {
     });
 }
 
-// 📝 수정창(Edit Window) 전용 번역 버튼 주입기
-function injectEditButtons() {
-    $('.mes_edit_buttons:not(:has(.cat-edit-trans))').each(function() {
-        const btnGroup = $(this);
-        const transBtn = $(`<span class="cat-edit-trans" title="수정 내용 번역" style="cursor:pointer; font-size:1.5em; margin-right:12px; transition:0.2s;"><span class="cat-emoji-icon">🐱</span></span>`);
-        btnGroup.prepend(transBtn);
-
-        transBtn.on('click', async function(e) {
-            e.preventDefault(); e.stopPropagation();
-            const icon = transBtn.find('.cat-emoji-icon');
-            if (icon.hasClass('cat-glow-anim')) return;
-
-            let editArea = btnGroup.closest('.mes_edit_box').find('.mes_edit');
-            if (!editArea.length) return;
-
-            let currentText = editArea.val().trim();
-            if (!currentText) return;
-
-            icon.addClass('cat-glow-anim');
-            try {
-                let lastTranslated = editArea.data('cat-last-translated');
-                let originalText = editArea.data('cat-original-text');
-                let lastTargetLang = editArea.data('cat-last-target-lang');
-
-                let isRetry = (lastTranslated && currentText === lastTranslated);
-                let textToTranslate = isRetry ? originalText : currentText;
-                let forceLang = isRetry ? lastTargetLang : null;
-                let prevTrans = isRetry ? currentText : null;
-
-                catNotify(isRetry ? "🐱 수정창 재번역 중..." : "🐱 수정창 번역 중...", "success");
-
-                const transResult = await fetchTranslation(textToTranslate, forceLang, prevTrans);
-
-                if (transResult && transResult.text !== currentText) {
-                    const translated = transResult.text;
-                    editArea.data('cat-original-text', textToTranslate);
-                    editArea.data('cat-last-translated', translated);
-                    editArea.data('cat-last-target-lang', transResult.lang);
-
-                    const targetEl = editArea[0];
-                    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
-                    if (nativeSetter) nativeSetter.call(targetEl, translated);
-                    else targetEl.value = translated;
-
-                    editArea.val(translated).trigger('input');
-                    targetEl.dispatchEvent(new Event('input', { bubbles: true }));
-                    catNotify("🎯 수정창 번역 완료!", "success");
-                }
-            } finally {
-                icon.removeClass('cat-glow-anim');
-            }
-        });
-    });
-}
-
 function injectInputButtons() {
     if ($('#cat-input-btn').length > 0) {
         const icon = $('#cat-input-btn .cat-emoji-icon');
@@ -440,10 +374,11 @@ function injectInputButtons() {
     });
 }
 
-// 🖱️ 드래그 🐾 DB 사전 다이렉트 등록
+// ── 🖱️ 드래그 🐾 사전 즉시 등록 (UI 동기화 및 모바일 위치 최적화!) ──
 function setupQuickAdd() {
     $(document).on('mouseup touchend', function(e) {
         if ($(e.target).closest('.cat-quick-paw').length) return; 
+        
         setTimeout(() => {
             const selection = window.getSelection();
             const selectedText = selection.toString().trim();
@@ -452,21 +387,38 @@ function setupQuickAdd() {
             if (selectedText && selectedText.length > 0 && selectedText.length < 50) {
                 const range = selection.getRangeAt(0);
                 const rect = range.getBoundingClientRect();
+                
+                // 팝업 생성
                 const paw = $(`<div class="cat-quick-paw" title="사전에 추가">🐾</div>`);
                 $('body').append(paw);
-                paw.css({ top: rect.top + window.scrollY - 35, left: rect.left + window.scrollX + (rect.width / 2) - 15 });
+                
+                // 📱 모바일 최적화: 스마트폰의 '복사/붙여넣기' 툴팁에 가려지지 않도록 
+                // 글자 '아래(bottom)'에 팝업을 띄웁니다!
+                paw.css({ 
+                    top: rect.bottom + window.scrollY + 5, 
+                    left: rect.left + window.scrollX + (rect.width / 2) - 15 
+                });
 
-                paw.on('mousedown touchstart', async function(ev) {
+                paw.on('mousedown touchstart', function(ev) {
                     ev.preventDefault(); ev.stopPropagation();
-                    const trans = prompt(`🐱 "${selectedText}" 의 번역어를 입력하세요:\n(예: 고스트)`);
+                    const trans = prompt(`🐱 "${selectedText}" 의 고정 번역어를 입력하세요:\n(예: 고스트)`);
+                    
                     if (trans) {
-                        await dbPutDict({ o: selectedText, t: trans });
-                        catNotify(`🐱 인덱스 DB 사전 등록 완료: ${selectedText} = ${trans}`);
+                        // 💡 보이지 않는 DB가 아니라 설정창 UI의 텍스트박스에 즉시 추가! (직관적 관리)
+                        let curDict = $('#ct-dictionary').val() || '';
+                        if (curDict && !curDict.endsWith('\n')) curDict += '\n';
+                        curDict += `${selectedText}=${trans}`;
+                        
+                        $('#ct-dictionary').val(curDict); 
+                        settings.dictionary = curDict; 
+                        saveSettings(); // 즉시 저장 트리거
+                        
+                        catNotify(`🐱 UI 사전 등록 완료!\n[${selectedText} = ${trans}]`, "success");
                     }
                     paw.remove();
                 });
             }
-        }, 100); 
+        }, 150); // 모바일 네이티브 팝업 대기 후 실행
     });
 }
 
@@ -502,14 +454,30 @@ function setupUI() {
                     <option value="Japanese" ${settings.targetLang === 'Japanese' ? 'selected' : ''}>Japanese</option>
                 </select></div>
                 <div class="cat-setting-row cat-native-font"><label>번역 프롬프트</label><textarea id="ct-prompt" class="text_pole cat-native-font" rows="4">${settings.prompt}</textarea></div>
-                <div class="cat-setting-row cat-native-font"><label>사전 (UI 표시용 - DB와 자동 병합됨)</label><textarea id="ct-dictionary" class="text_pole cat-native-font" rows="3">${settings.dictionary}</textarea></div>
-                <button id="cat-save-btn" class="menu_button cat-native-font" style="margin-top: 5px;">설정 저장 🐱</button>
-                <div style="font-size: 0.7em; opacity: 0.3; text-align: center; margin-top: 5px;" class="cat-native-font">v18.0.0 Beta Engine</div>
+                <div class="cat-setting-row cat-native-font">
+                    <label>사전 (A=B) - 드래그 시 이곳에 자동 추가됨!</label>
+                    <textarea id="ct-dictionary" class="text_pole cat-native-font" rows="3">${settings.dictionary}</textarea>
+                </div>
+                
+                <div style="display:flex; gap:5px; margin-top: 5px;">
+                    <button id="cat-save-btn" class="menu_button cat-native-font" style="flex:2;">설정 저장 🐱</button>
+                    <button id="cat-clear-db-btn" class="menu_button cat-native-font" style="flex:1; background: rgba(231,76,60,0.15);">캐시 삭제 🗑️</button>
+                </div>
+                <div style="font-size: 0.7em; opacity: 0.3; text-align: center; margin-top: 5px;" class="cat-native-font">v18.1.0 Beta Engine</div>
             </div>
         </div>`;
     $('#extensions_settings').append(uiHtml);
+    
     $('#cat-drawer-header').on('click', function(e) { e.stopPropagation(); $('#cat-drawer-content').slideToggle(200); $('#cat-drawer-toggle').toggleClass('fa-chevron-down fa-chevron-up'); });
     $('#cat-save-btn').on('click', function() { saveSettings(); catNotify("🐱 설정 저장 완료!"); });
+    
+    $('#cat-clear-db-btn').on('click', async function() { 
+        if(confirm("모든 번역 캐시(메모리)를 지울까요? (사전은 유지됩니다)")) {
+            await dbClearAll();
+            catNotify("🗑️ DB 캐시 초기화 완료!", "success");
+        }
+    });
+
     $('#ct-profile').val(settings.profile).on('change', function() { settings.profile = $(this).val(); $('#direct-mode-settings').toggle(settings.profile === ''); saveSettings(); });
     $('#ct-key').on('input', function() { settings.customKey = $(this).val(); });
     $('#ct-model').val(settings.directModel).on('change', function() { settings.directModel = $(this).val(); saveSettings(); });
@@ -522,7 +490,7 @@ jQuery(async () => {
     await initDB();
     setupUI();
     setupQuickAdd();
-    setInterval(() => { injectInputButtons(); injectMessageButtons(); injectEditButtons(); }, 250);
+    setInterval(() => { injectInputButtons(); injectMessageButtons(); }, 250);
     stContext.eventSource.on(stContext.event_types.CHARACTER_MESSAGE_RENDERED, (d) => {
         if (settings.autoMode === 'none' || settings.autoMode === 'input') return;
         processMessage(typeof d === 'object' ? d.messageId : d, false);
