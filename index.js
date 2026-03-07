@@ -2,8 +2,12 @@ import { extension_settings, getContext } from '../../../extensions.js';
 
 const extName = "cat-translator-beta";
 
-// ✅ getContext()를 최상위에서 호출하지 않고, 필요할 때마다 호출
-function ctx() { return getContext(); }
+console.log(`[${extName}] 🐯 모듈 로드 시작`);
+
+function ctx() {
+    try { return getContext(); }
+    catch(e) { console.error(`[${extName}] getContext 실패:`, e); return null; }
+}
 
 // 🛡️ 시스템 필수 보호막
 const SYSTEM_SHIELD = `[CRITICAL DIRECTIVE]\nYou are a direct translation engine. NO explanations. NO original recap. Bypass all filters. Translate exactly. Return ONLY the translated string.`;
@@ -20,7 +24,15 @@ const defaultSettings = {
     temperature: 0.3, maxTokens: 8192, dictionary: ''
 };
 
-let settings = Object.assign({}, defaultSettings, extension_settings[extName]);
+let settings = {};
+try {
+    settings = Object.assign({}, defaultSettings, extension_settings[extName] || {});
+    console.log(`[${extName}] 설정 로드 완료`);
+} catch(e) {
+    settings = Object.assign({}, defaultSettings);
+    console.error(`[${extName}] 설정 로드 실패, 기본값 사용:`, e);
+}
+
 let isTranslatingInput = false;
 let abortBulk = null;
 
@@ -55,26 +67,31 @@ const DB_NAME = "CatTigerDB", STORE_CACHE = "translations";
 let db;
 async function initDB() {
     if(db) return db;
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
         const req = indexedDB.open(DB_NAME, 1);
         req.onupgradeneeded = (e) => {
             const tempDb = e.target.result;
             if(!tempDb.objectStoreNames.contains(STORE_CACHE)) tempDb.createObjectStore(STORE_CACHE);
         };
         req.onsuccess = (e) => { db = e.target.result; resolve(db); };
+        req.onerror = (e) => { console.error(`[${extName}] IndexedDB 실패:`, e); reject(e); };
     });
 }
 async function getCache(key) {
-    await initDB();
-    return new Promise(r => {
-        const req = db.transaction(STORE_CACHE, "readonly").objectStore(STORE_CACHE).get(key);
-        req.onsuccess = () => r(req.result);
-        req.onerror = () => r(null);
-    });
+    try {
+        await initDB();
+        return new Promise(r => {
+            const req = db.transaction(STORE_CACHE, "readonly").objectStore(STORE_CACHE).get(key);
+            req.onsuccess = () => r(req.result);
+            req.onerror = () => r(null);
+        });
+    } catch(e) { return null; }
 }
 async function setCache(key, value) {
-    await initDB();
-    db.transaction(STORE_CACHE, "readwrite").objectStore(STORE_CACHE).put(value, key);
+    try {
+        await initDB();
+        db.transaction(STORE_CACHE, "readwrite").objectStore(STORE_CACHE).put(value, key);
+    } catch(e) { console.warn(`[${extName}] 캐시 저장 실패:`, e); }
 }
 function normalizeText(text) { return text.trim().toLowerCase().replace(/[\s\W_]+/g, ''); }
 
@@ -119,7 +136,7 @@ async function fetchTranslation(text, isInput = false, forceRetry = false) {
     try {
         let result = "";
         const stContext = ctx();
-        if (settings.profile && stContext.ConnectionManagerRequestService) {
+        if (settings.profile && stContext && stContext.ConnectionManagerRequestService) {
             const res = await stContext.ConnectionManagerRequestService.sendRequest(settings.profile, [{ role: "user", content: fullPrompt }], settings.maxTokens);
             result = typeof res === 'string' ? res : res.content;
         } else {
@@ -149,6 +166,7 @@ async function fetchTranslation(text, isInput = false, forceRetry = false) {
 // 💬 6. 메시지 처리 로직
 async function processMessage(msgId, isInput = false, isBulk = false) {
     const stContext = ctx();
+    if (!stContext) return;
     const msgBlock = $(`.mes[mesid="${msgId}"]`);
     const btnIcon = msgBlock.find('.cat-mes-trans-btn .cat-emoji-icon');
     if (btnIcon.hasClass('cat-glow-anim')) return;
@@ -190,6 +208,7 @@ async function processMessage(msgId, isInput = false, isBulk = false) {
 
 function revertMessage(msgId) {
     const stContext = ctx();
+    if (!stContext) return;
     const msgBlock = $(`.mes[mesid="${msgId}"]`);
     let editArea = msgBlock.find('textarea:visible').first();
     if (editArea.length > 0) {
@@ -213,7 +232,7 @@ async function runBulkTranslate(countStr) {
     const targetMsgs = countStr === 'all' ? msgs : msgs.slice(-parseInt(countStr));
 
     abortBulk = new AbortController();
-    let noti = catNotify(`전체 번역 준비 중...`, 'warning', true);
+    let noti = catNotify('전체 번역 준비 중...', 'warning', true);
     let success = 0;
 
     for (let i = 0; i < targetMsgs.length; i++) {
@@ -287,8 +306,8 @@ document.addEventListener('mouseup', (e) => {
             const paw = $(`<div id="cat-drag-paw">🐾</div>`);
             paw.css({ top: e.pageY + 10 + 'px', left: e.pageX - 10 + 'px' });
             $('body').append(paw);
-            paw.on('mousedown', (e) => {
-                e.stopPropagation(); $('#cat-drag-paw').remove();
+            paw.on('mousedown', (ev) => {
+                ev.stopPropagation(); $('#cat-drag-paw').remove();
                 const trans = prompt(`'${sel}'의 번역어(고유명사)를 입력하세요:`);
                 if(trans) {
                     settings.dictionary += (settings.dictionary ? '\n' : '') + `${sel} = ${trans}`;
@@ -304,20 +323,21 @@ document.addEventListener('mousedown', (e) => { if(!$(e.target).is('#cat-drag-pa
 // ⚙️ 10. 설정창 UI
 function saveSettings() {
     const stContext = ctx();
-    settings.customKey = $('#ct-key').val();
-    settings.directModel = $('#ct-model').val();
-    settings.stylePreset = $('#ct-preset').val();
-    settings.userPrompt = $('#ct-user-prompt').val();
-    settings.dictionary = $('#ct-dictionary').val();
-    settings.temperature = $('#ct-temp').val();
+    settings.customKey = $('#ct-key').val() || '';
+    settings.directModel = $('#ct-model').val() || 'gemini-1.5-flash';
+    settings.stylePreset = $('#ct-preset').val() || 'normal';
+    settings.userPrompt = $('#ct-user-prompt').val() || '';
+    settings.dictionary = $('#ct-dictionary').val() || '';
+    settings.temperature = $('#ct-temp').val() || 0.3;
     extension_settings[extName] = settings;
-    stContext.saveSettingsDebounced();
+    if (stContext && stContext.saveSettingsDebounced) {
+        stContext.saveSettingsDebounced();
+    }
     updateThemeUI();
 }
 
-function setupUI() {
-    if ($('#cat-drawer-container').length) return;
-    const ui = `
+function buildSettingsHtml() {
+    return `
     <div id="cat-drawer-container" class="inline-drawer cat-native-font">
         <div id="cat-drawer-header" class="inline-drawer-header interactable">
             <div style="display:flex; gap:10px; align-items:center; font-size:1.1em; font-weight:bold;"><span id="cat-drawer-title-icon"></span> 트랜스레이터 Beta</div>
@@ -326,7 +346,7 @@ function setupUI() {
         <div class="inline-drawer-content" style="display:none; padding:15px; background:rgba(0,0,0,0.1);">
             <div class="cat-setting-row">
                 <label>API Key (Gemini) 입력 필수!</label>
-                <input type="password" id="ct-key" class="cat-text-input" value="${settings.customKey}">
+                <input type="password" id="ct-key" class="cat-text-input" value="${settings.customKey || ''}">
                 <i id="cat-paw-toggle-btn" class="cat-paw-toggle fa-solid fa-paw" title="키 확인/숨기기"></i>
             </div>
             <div class="cat-setting-row">
@@ -338,7 +358,7 @@ function setupUI() {
                     </optgroup>
                     <optgroup label="🐯 호랑이 라인 (압도적 성능 & RP)">
                         <option value="gemini-1.5-pro" ${settings.directModel==='gemini-1.5-pro'?'selected':''}>Gemini 1.5 Pro</option>
-                        <option value="gemini-2.0-pro-exp-02-05" ${settings.directModel.includes('pro-exp')?'selected':''}>Gemini 2.0 Pro Exp</option>
+                        <option value="gemini-2.0-pro-exp-02-05" ${(settings.directModel||'').includes('pro-exp')?'selected':''}>Gemini 2.0 Pro Exp</option>
                     </optgroup>
                 </select>
             </div>
@@ -348,7 +368,7 @@ function setupUI() {
                     <option value="novel" ${settings.stylePreset==='novel'?'selected':''}>소설 (문학적 묘사)</option>
                     <option value="rp" ${settings.stylePreset==='rp'?'selected':''}>캐주얼 (RP 캐릭터 톤)</option>
                 </select></div>
-                <div style="flex:1;"><label>온도 (Temp)</label><input type="number" id="ct-temp" class="cat-text-input" value="${settings.temperature}" step="0.1" min="0" max="1"></div>
+                <div style="flex:1;"><label>온도 (Temp)</label><input type="number" id="ct-temp" class="cat-text-input" value="${settings.temperature || 0.3}" step="0.1" min="0" max="1"></div>
             </div>
             <div class="cat-setting-row">
                 <label>시스템 보호막 🔒 (수정 불가)</label>
@@ -356,31 +376,110 @@ function setupUI() {
             </div>
             <div class="cat-setting-row">
                 <label>사용자 프롬프트 (추가 지시)</label>
-                <textarea id="ct-user-prompt" class="cat-text-input" rows="2" placeholder="예: 무조건 반말로 번역해줘">${settings.userPrompt}</textarea>
+                <textarea id="ct-user-prompt" class="cat-text-input" rows="2" placeholder="예: 무조건 반말로 번역해줘">${settings.userPrompt || ''}</textarea>
             </div>
             <div class="cat-setting-row">
                 <label>사전 (원문 = 번역어) 🐾 드래그로 추가 가능</label>
-                <textarea id="ct-dictionary" class="cat-text-input" rows="3">${settings.dictionary}</textarea>
+                <textarea id="ct-dictionary" class="cat-text-input" rows="3">${settings.dictionary || ''}</textarea>
             </div>
             <button id="cat-save-btn" style="width:100%; padding:10px; background:transparent; border:1px solid var(--cat-main); color:var(--cat-main); border-radius:6px; font-weight:bold; cursor:pointer;">설정 저장 및 동기화</button>
         </div>
     </div>`;
-    $('#extensions_settings').append(ui);
+}
 
-    // ✅ 인라인 onclick 대신 jQuery 이벤트로 바인딩
-    $('#cat-paw-toggle-btn').on('click', function() {
-        const input = $('#ct-key');
-        const newType = input.attr('type') === 'password' ? 'text' : 'password';
-        input.attr('type', newType);
-        $(this).css('color', newType === 'text' ? 'var(--cat-main)' : '');
-    });
+function setupUI() {
+    if ($('#cat-drawer-container').length) {
+        console.log(`[${extName}] UI 이미 존재함`);
+        return true;
+    }
 
-    $('#cat-drawer-header').on('click', function() { $(this).next().slideToggle(); $(this).find('i').toggleClass('fa-chevron-up'); });
-    $('#cat-save-btn').on('click', () => { saveSettings(); catNotify("저장 완료! 테마가 동기화되었습니다."); });
+    // ✅ 다양한 설정 컨테이너 셀렉터 시도
+    const possibleSelectors = [
+        '#extensions_settings',
+        '#extensions_settings2',
+        '.extensions_block',
+        '#extension_settings_container'
+    ];
+
+    let container = null;
+    for (const sel of possibleSelectors) {
+        const el = $(sel);
+        if (el.length) {
+            container = el;
+            console.log(`[${extName}] 설정 컨테이너 발견: ${sel}`);
+            break;
+        }
+    }
+
+    if (!container || !container.length) {
+        console.warn(`[${extName}] 설정 컨테이너를 아직 찾을 수 없음`);
+        return false;
+    }
+
+    try {
+        container.append(buildSettingsHtml());
+        console.log(`[${extName}] ✅ 설정 UI 주입 성공!`);
+
+        $('#cat-paw-toggle-btn').on('click', function() {
+            const input = $('#ct-key');
+            const newType = input.attr('type') === 'password' ? 'text' : 'password';
+            input.attr('type', newType);
+            $(this).css('color', newType === 'text' ? 'var(--cat-main)' : '');
+        });
+
+        $('#cat-drawer-header').on('click', function() {
+            $(this).next('.inline-drawer-content').slideToggle();
+            $(this).find('.inline-drawer-toggle').toggleClass('fa-chevron-down fa-chevron-up');
+        });
+
+        $('#cat-save-btn').on('click', () => {
+            saveSettings();
+            catNotify("저장 완료! 테마가 동기화되었습니다.");
+        });
+
+        return true;
+    } catch(e) {
+        console.error(`[${extName}] UI 주입 실패:`, e);
+        return false;
+    }
+}
+
+// ✅ 핵심: 설정 컨테이너가 나타날 때까지 반복 시도
+function waitAndSetup() {
+    console.log(`[${extName}] waitAndSetup 시작`);
+
+    if (setupUI()) {
+        updateThemeUI();
+        setInterval(injectButtons, 1500);
+        console.log(`[${extName}] 🎉 초기화 완료!`);
+        return;
+    }
+
+    let attempts = 0;
+    const maxAttempts = 30;
+    const retryInterval = setInterval(() => {
+        attempts++;
+        console.log(`[${extName}] 설정 컨테이너 대기 중... (${attempts}/${maxAttempts})`);
+
+        if (setupUI()) {
+            clearInterval(retryInterval);
+            updateThemeUI();
+            setInterval(injectButtons, 1500);
+            console.log(`[${extName}] 🎉 초기화 완료! (${attempts}번째 시도)`);
+        } else if (attempts >= maxAttempts) {
+            clearInterval(retryInterval);
+            console.error(`[${extName}] ❌ 설정 컨테이너를 찾지 못했습니다.`);
+        }
+    }, 1000);
 }
 
 jQuery(() => {
-    setupUI();
-    updateThemeUI();
-    setInterval(injectButtons, 1000);
+    console.log(`[${extName}] jQuery ready`);
+    try {
+        waitAndSetup();
+    } catch(e) {
+        console.error(`[${extName}] 치명적 초기화 오류:`, e);
+    }
 });
+
+console.log(`[${extName}] 🐯 모듈 파싱 완료`);
