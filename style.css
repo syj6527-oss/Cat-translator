@@ -1,36 +1,48 @@
+:root {
+    --cat-main: #ff9800; /* 기본 고양이 오렌지 */
+    --cat-glow: rgba(255, 152, 0, 0.6);
+}
+[data-cat-theme="tiger"] {
+    --cat-main: #ffd700; /* 호랑이 골드 */
+    --cat-glow: rgba(255, 215, 0, 0.8);
+}
+
 .cat-native-font { font-family: var(--smart-font, 'Noto Sans', 'Segoe UI', sans-serif) !important; }
-.cat-setting-row label { display: block; font-size: 0.85em; font-weight: bold; margin-bottom: 3px; color: #ff9f43; }
+.cat-setting-row { margin-bottom: 12px; position: relative; }
+.cat-setting-row > label { display: block; font-size: 0.85em; font-weight: bold; margin-bottom: 4px; color: var(--cat-main); }
 
-/* 📱 입력창 정렬 (간격 8px) */
-#cat-input-container { display: inline-flex; align-items: center; justify-content: center; gap: 8px; margin-right: 10px; height: 100%; vertical-align: middle; }
-#cat-input-trans { cursor: pointer; font-size: 1.6em; display: flex; align-items: center; }
-#cat-input-revert { cursor: pointer; color: #ffb4a2; opacity: 0.7; font-size: 1.2em; }
+/* 모바일 친화적 입력창 및 버튼 */
+.cat-text-input { width: 100%; box-sizing: border-box; padding: 8px; border-radius: 6px; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: inherit; }
+.cat-readonly-shield { background: rgba(255, 0, 0, 0.05) !important; border-color: rgba(255, 100, 100, 0.3) !important; font-size: 0.8em; opacity: 0.8; }
 
-/* 🐱 실시간 발광 효과 (오렌지 후광) */
-.cat-glow-anim { 
-    animation: cat-power-glow 0.8s infinite alternate ease-in-out !important; 
-    filter: drop-shadow(0 0 12px #ff9f43) brightness(1.2) !important;
+/* 🐾 비밀번호 토글 발바닥 */
+.cat-paw-toggle { position: absolute; right: 10px; top: 28px; cursor: pointer; opacity: 0.6; transition: 0.2s; font-size: 1.2em; }
+.cat-paw-toggle:hover { opacity: 1; transform: scale(1.1); filter: drop-shadow(0 0 5px var(--cat-main)); }
+
+/* 버튼 정렬 & 애니메이션 */
+#cat-drawer-header { display: flex !important; align-items: center !important; justify-content: space-between !important; cursor: pointer !important; padding: 0.8em !important; background: rgba(0,0,0,0.2); border-radius: 8px; }
+.cat-emoji-icon { display: inline-block; transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+.cat-glow-anim { animation: cat-calm-pulse 1s infinite alternate ease-in-out !important; }
+
+@keyframes cat-calm-pulse {
+    0% { transform: scale(1); filter: drop-shadow(0 0 2px var(--cat-glow)); }
+    100% { transform: scale(1.2); filter: drop-shadow(0 0 15px var(--cat-main)); }
 }
-@keyframes cat-power-glow {
-    0% { transform: scale(1); }
-    100% { transform: scale(1.1); filter: drop-shadow(0 0 18px #ffea00); }
-}
 
-/* 🚨 알림창 */
-.cat-notification { position: fixed; top: -60px; left: 50%; transform: translateX(-50%); padding: 12px 24px; border-radius: 30px; color: white; font-weight: bold; z-index: 2147483647 !important; box-shadow: 0 4px 15px rgba(0,0,0,0.3); transition: top 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
-.cat-notification.show { top: 25px; }
+/* 💬 모바일 최적화: 입력창 옆 아이콘들 (Flex 유지) */
+#cat-input-btn-group { display: inline-flex; align-items: center; gap: 8px; margin-right: 8px; vertical-align: middle; }
+.cat-action-btn { cursor: pointer; font-size: 1.3em; opacity: 0.7; transition: 0.2s; }
+.cat-action-btn:hover { opacity: 1; transform: scale(1.1); }
 
-/* 🐾 드래그 팝업 (순정 오렌지) */
-.cat-quick-paw { 
-    position: absolute; 
-    font-size: 38px; 
-    cursor: pointer; 
-    z-index: 2147483647; 
-    filter: drop-shadow(0 0 12px rgba(255, 159, 67, 0.8)); 
-    animation: cat-paw-bounce 0.6s infinite alternate; 
-    user-select: none;
-}
-@keyframes cat-paw-bounce { from { transform: translateY(0); } to { transform: translateY(-10px); } }
+/* 🐾 드래그 팝업 (모바일 터치 대응) */
+#cat-drag-paw { position: absolute; z-index: 99999; cursor: pointer; font-size: 1.5em; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5)); animation: paw-pop 0.2s ease-out; }
+@keyframes paw-pop { 0% { transform: scale(0); } 100% { transform: scale(1); } }
 
-/* 설정창 저장 버튼 */
-#cat-save-btn { background-color: rgba(255, 159, 67, 0.2); border: 1px solid #ff9f43; color: #ff9f43; padding: 10px; border-radius: 8px; width: 100%; font-weight: bold; }
+/* 알림창 */
+.cat-notification { position: fixed; top: -60px; left: 50%; transform: translateX(-50%); padding: 12px 24px; border-radius: 30px; color: white; font-weight: bold; font-size: 14px; z-index: 2147483647 !important; box-shadow: 0 4px 15px rgba(0,0,0,0.4); transition: top 0.4s; }
+.cat-notification.show { top: 20px; }
+
+/* 벌크 번역 메뉴 */
+#cat-bulk-menu { position: absolute; bottom: 100%; right: 0; background: var(--SmartThemeBlurTintColor, #333); border: 1px solid var(--cat-main); border-radius: 8px; padding: 5px; display: none; flex-direction: column; gap: 5px; min-width: 100px; z-index: 1000; margin-bottom: 2px; }
+.cat-bulk-item { padding: 8px; text-align: center; cursor: pointer; border-radius: 4px; font-size: 0.9em; }
+.cat-bulk-item:hover { background: rgba(255, 255, 255, 0.1); color: var(--cat-main); }
