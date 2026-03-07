@@ -1,8 +1,7 @@
 /* =============================================
-   🐱 캣 트랜스레이터 v19.1 - style.css
+   🐱 캣 트랜스레이터 v19.3 - style.css
    ============================================= */
 
-/* 폰트: 실리태번 네이티브와 100% 동기화 */
 .cat-native-font { font-family: var(--smart-font, 'Noto Sans', 'Segoe UI', sans-serif) !important; }
 
 /* 설정 필드 수직 레이아웃 */
