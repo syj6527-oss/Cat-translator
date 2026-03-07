@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Cat Translator v18.3.1 - utils.js
+// 🐱 Cat Translator v18.1.0 - utils.js
 // 유틸리티: 알림, 정규식 세탁기, HTML/CSS 방어, 언어 감지
 // ============================================================
 
@@ -8,19 +8,14 @@ export function getThemeEmoji() {
     return theme === 'tiger' ? '🐯' : '🐱';
 }
 
+// 번역 완료 보상 이모지 🐟/🍖
 export function getCompletionEmoji() {
     const theme = document.body.getAttribute('data-cat-theme');
     return theme === 'tiger' ? '🍖' : '🐟';
 }
 
-// 🚨 토스트 속도 제어: 부드러운 전환 및 유지 시간(3.5초) 증가!
 export function catNotify(message, type = 'success') {
-    const existing = $('.cat-notification');
-    if (existing.length > 0) {
-        existing.removeClass('show');
-        setTimeout(() => existing.remove(), 300); 
-    }
-
+    $('.cat-notification').remove();
     const emoji = getThemeEmoji();
     const colors = {
         success: '#2ecc71',
@@ -31,18 +26,14 @@ export function catNotify(message, type = 'success') {
     const bgColor = colors[type] || colors.success;
     const displayMsg = message.replace(/^(🐱|🐯)\s*/, `${emoji} `);
     const notifyHtml = $(`<div class="cat-notification cat-native-font" style="background-color: ${bgColor};">${displayMsg}</div>`);
-    
     $('body').append(notifyHtml);
-    
-    setTimeout(() => {
-        requestAnimationFrame(() => notifyHtml.addClass('show'));
-    }, 50);
+    requestAnimationFrame(() => notifyHtml.addClass('show'));
 
     if (type !== 'progress') {
         setTimeout(() => {
             notifyHtml.removeClass('show');
-            setTimeout(() => notifyHtml.remove(), 400);
-        }, 3500);
+            setTimeout(() => notifyHtml.remove(), 500);
+        }, 2500);
     }
     return notifyHtml;
 }
@@ -60,13 +51,14 @@ export function catNotifyProgress(message, onAbort) {
     return el;
 }
 
+// 🚨 마스터 요청: 엔터(줄바꿈) 증발하는 악질 버그 수리 완료!
 export function cleanResult(text) {
     if (!text) return "";
     return text
         .replace(/^(번역|Translation|Output|Input|Result):\s*/gi, "")
         .replace(/```[\s\S]*?```/g, "")
         .replace(/`([^`]+)`/g, "$1")
-        .replace(/[^\S\r\n]{2,}/g, " ") 
+        .replace(/[^\S\r\n]{2,}/g, " ") // 스페이스랑 탭만 줄이고 줄바꿈(\r\n)은 절대 안 건드림!
         .trim();
 }
 
