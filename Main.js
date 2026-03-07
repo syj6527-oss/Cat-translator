@@ -18,7 +18,7 @@ import {
 import { STYLE_PRESETS } from './translator.js';
 
 // ── 상수 ──────────────────────────────────────
-const extName = "cat-translator-beta";
+const extName   = "cat-translator";
 const stContext = getContext();
 
 // ── 전역 상태 ──────────────────────────────────
@@ -28,7 +28,7 @@ let originalInputText = "";    // 입력창 원문 복구용
 // ── 기본 설정값 ───────────────────────────────
 const defaultSettings = {
     customKey:      '',                   // Gemini API 키
-    modelId:        'st-profile',         // AI 모델 (기본: 실리태번 프리필 연동)
+    modelId:        'direct',             // AI 모델 (기본: 직접 연결 모드)
     autoMode:       'off',                // 자동 번역 모드
     targetLang:     'Korean',             // 번역 목표 언어
     temperature:    0.1,                  // 온도 (0~1)
