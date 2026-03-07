@@ -29,6 +29,11 @@ async function processMessage(id, isInput = false, abortSignal = null, silent = 
 
     try {
         const mesBlock = $(`.mes[mesid="${msgId}"]`);
+        
+        // 🚨 마스터 지시: 번역 누르면 거슬리는 팝업 및 상태창(Extra Details) 스르륵 숨기기!
+        $('.cat-history-popup, .cat-drag-popup').remove();
+        mesBlock.find('details').removeAttr('open');
+
         const editArea = mesBlock.find('textarea.edit_textarea:visible, textarea.mes_edit_textarea:visible, textarea:visible').first();
         if (editArea.length > 0) { await handleEditAreaTranslation(editArea, msgId, abortSignal); return; }
 
@@ -36,7 +41,6 @@ async function processMessage(id, isInput = false, abortSignal = null, silent = 
         const existingTranslation = !isInput ? msg.extra?.display_text : null;
         const isRetranslation = !!existingTranslation;
 
-        // 🚨 마스터 튜닝: 번역 진행 중 토스트 알림!
         if (!silent && !isRetranslation) {
             catNotify(`${getThemeEmoji()} 번역 진행 중...`, "success");
         }
@@ -58,7 +62,7 @@ async function processMessage(id, isInput = false, abortSignal = null, silent = 
 }
 
 async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTranslation, abortSignal, silent = false) {
-    const forceLang = null; // 스마트 언어 감지로 위임
+    const forceLang = null; 
     const contextRange = parseInt(settings.contextRange) || 1;
     const contextMsgs = gatherContextMessages(msgId, stContext, contextRange);
 
@@ -68,6 +72,9 @@ async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTran
         if (!msg.extra) msg.extra = {};
         if (isInput) { if (!msg.extra.original_mes) msg.extra.original_mes = textToTranslate; msg.mes = result.text; } else { msg.extra.display_text = result.text; }
         stContext.updateMessageBlock(msgId, msg);
+        
+        // 🚨 마스터 지시: 번역 성공 시 영롱한 완료 알람 띄우기!
+        if (!silent) catNotify(`✅ 번역 완료!`, "success");
     }
 }
 
@@ -79,7 +86,7 @@ async function handleEditAreaTranslation(editArea, msgId, abortSignal) {
     catNotify(isRetry ? `${getThemeEmoji()} 다른 표현으로 재번역 중...` : `${getThemeEmoji()} 스마트 번역 중...`, "success");
     const contextRange = parseInt(settings.contextRange) || 1; const contextMsgs = gatherContextMessages(msgId, stContext, contextRange);
     const result = await fetchTranslation(textToTranslate, settings, stContext, { forceLang, prevTranslation: prevTrans, contextMessages: contextMsgs, abortSignal });
-    if (result && result.text !== currentText) { editArea.data('cat-original-text', textToTranslate); editArea.data('cat-last-translated', result.text); editArea.data('cat-last-target-lang', result.lang); setTextareaValue(editArea[0], result.text); catNotify(isRetry ? `🎯 재번역 덮어쓰기 완료!` : `🎯 번역 덮어쓰기 완료!`, "success"); }
+    if (result && result.text !== currentText) { editArea.data('cat-original-text', textToTranslate); editArea.data('cat-last-translated', result.text); editArea.data('cat-last-target-lang', result.lang); setTextareaValue(editArea[0], result.text); catNotify(`✅ 번역 덮어쓰기 완료!`, "success"); }
 }
 
 function revertMessage(id) {
