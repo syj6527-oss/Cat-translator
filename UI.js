@@ -6,7 +6,7 @@
 import { extension_settings, getContext } from '../../../../scripts/extensions.js';
 import { CORE_DEFENSE, STYLE_PRESETS }    from './translator.js';
 
-const extName  = "cat-translator-beta";
+const extName  = "cat-translator";
 const stContext = getContext();
 
 // ── 🚨 팝업 알림 ──────────────────────────────
@@ -93,6 +93,14 @@ export function injectButtons(settings, onTranslate, onRevert) {
 export function setupUI(settings, { onSave, onBatch, onAbort, onClear }) {
     if ($('#cat-trans-container').length) return; // 중복 생성 방지
 
+    // ── 실리태번 프리필 목록 동적 로드 ──
+    // 사용자가 실리태번에 세팅해놓은 프리필을 불러와서 드롭다운에 표시
+    const profiles = extension_settings?.connectionManager?.profiles || [];
+    let profileOptions = `<option value="direct" ${settings.modelId==='direct'?'selected':''}>⚡ 직접 연결 모드 (API Key 사용)</option>`;
+    profiles.forEach(p => {
+        profileOptions += `<option value="${p.id}" ${settings.modelId===p.id?'selected':''}>${p.name}</option>`;
+    });
+
     const html = `
     <div id="cat-trans-container" class="inline-drawer cat-native-font">
 
@@ -107,30 +115,22 @@ export function setupUI(settings, { onSave, onBatch, onAbort, onClear }) {
         <!-- 내용 -->
         <div id="cat-drawer-content" class="inline-drawer-content" style="display:none; padding:10px;">
 
-            <!-- API 키 -->
+            <!-- 연결 프리필 선택 -->
             <div class="cat-field">
-                <label>API Key (비워두면 실리태번 프리필 연동)</label>
+                <label>연결 프리필</label>
+                <select id="ct-model" class="text_pole cat-native-font">
+                    ${profileOptions}
+                </select>
+            </div>
+
+            <!-- 직접 연결 모드일 때만 표시되는 API 키 입력 -->
+            <div class="cat-field" id="ct-direct-mode" style="display:${settings.modelId==='direct'?'block':'none'};">
+                <label>API Key</label>
                 <div style="display:flex; align-items:center; gap:5px;">
                     <input type="password" id="ct-key" class="text_pole cat-native-font"
                            value="${settings.customKey}" style="flex:1;">
                     <span id="ct-key-toggle" style="cursor:pointer;" title="보이기/숨기기">🐾</span>
                 </div>
-            </div>
-
-            <!-- AI 모델 선택 -->
-            <div class="cat-field">
-                <label>AI 모델</label>
-                <select id="ct-model" class="text_pole cat-native-font">
-                    <option value="st-profile"                   ${settings.modelId==='st-profile'?'selected':''}>⚡ 실리태번 프리필 연동</option>
-                    <optgroup label="🐱 고양이 라인 (가성비 Flash)">
-                        <option value="gemini-1.5-flash"         ${settings.modelId==='gemini-1.5-flash'?'selected':''}>🐱 고양이 (Gemini 1.5 Flash)</option>
-                        <option value="gemini-2.0-flash"         ${settings.modelId==='gemini-2.0-flash'?'selected':''}>🚀 슈퍼고양이 (Gemini 2.0 Flash)</option>
-                    </optgroup>
-                    <optgroup label="🐯 호랑이 라인 (고성능 Pro)">
-                        <option value="gemini-1.5-pro"           ${settings.modelId==='gemini-1.5-pro'?'selected':''}>🐯 호랑이 (Gemini 1.5 Pro)</option>
-                        <option value="gemini-2.0-pro-exp-02-05" ${settings.modelId==='gemini-2.0-pro-exp-02-05'?'selected':''}>🐉 청룡 (Gemini 2.0 Pro Exp)</option>
-                    </optgroup>
-                </select>
             </div>
 
             <!-- 자동 모드 -->
@@ -250,6 +250,12 @@ export function setupUI(settings, { onSave, onBatch, onAbort, onClear }) {
     $('#ct-key-toggle').on('click', () => {
         const k = $('#ct-key');
         k.attr('type', k.attr('type') === 'password' ? 'text' : 'password');
+    });
+
+    // 프리필 선택 변경 시 직접연결 영역 토글
+    // 'direct' 선택 시 API Key 입력창 표시, 프리필 선택 시 숨김
+    $('#ct-model').on('change', function() {
+        $('#ct-direct-mode').toggle($(this).val() === 'direct');
     });
 
     // 버튼 이벤트 → main.js에서 넘겨받은 핸들러 연결
