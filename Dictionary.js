@@ -3,9 +3,6 @@
 // 사전 파싱 및 드래그 즉시 등록 로직
 // =============================================
 
-import { saveSettings } from './ui.js';
-import { catNotify }    from './ui.js';
-
 // ── 사전 파싱 ──────────────────────────────
 // settings.dictionaryText의 "Ghost=고스트" 형식을 배열로 변환
 // 반환값 예: [{ o: "Ghost", t: "고스트" }, ...]
@@ -31,7 +28,8 @@ export function applyDictionary(text, dictionaryText) {
 
 // ── 🖱️ 드래그 → 사전 즉시 등록 ──────────────
 // 텍스트 드래그 시 🐾 버튼 팝업 → 클릭하면 사전에 추가
-export function setupQuickAdd(settings) {
+// catNotify, saveSettings 는 main.js에서 주입받음 (순환 참조 방지)
+export function setupQuickAdd(settings, catNotify, saveSettings) {
     $(document).on('mouseup touchend', function(e) {
         // 🐾 버튼 자기 자신 클릭은 무시
         if ($(e.target).closest('.cat-quick-paw').length) return;
@@ -68,7 +66,7 @@ export function setupQuickAdd(settings) {
 
                         $('#ct-dict').val(cur);
                         settings.dictionaryText = cur;
-                        saveSettings(settings); // ui.js의 저장 함수 호출
+                        saveSettings(settings);
                         catNotify(`🐱 사전 등록: ${selectedText} = ${trans}`);
                     }
                     paw.remove();
