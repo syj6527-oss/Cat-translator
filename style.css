@@ -1,51 +1,22 @@
 /* =============================================
-   🐱 캣 트랜스레이터 v19.3 - style.css
+   🐱 캣 트랜스레이터 Beta - style.css
    ============================================= */
 
 .cat-native-font { font-family: var(--smart-font, 'Noto Sans', 'Segoe UI', sans-serif) !important; }
-
-/* 설정 필드 수직 레이아웃 */
-.cat-field { margin-bottom: 12px; }
-.cat-field label { display: block; font-size: 0.85em; font-weight: bold; margin-bottom: 5px; color: #ddd; }
-.cat-field .text_pole { width: 100%; box-sizing: border-box; resize: vertical; }
-
-#cat-save-btn { background-color: rgba(255, 159, 67, 0.2); border: 1px solid #ff9f43; color: white; font-weight: bold; transition: 0.2s; }
-#cat-save-btn:hover { background-color: #ff9f43; color: black; }
-#cat-clear-btn:hover { background-color: #e74c3c; color: white; }
-
-/* 🔒 고정 텍스트박스 */
-.cat-locked-textarea { background-color: rgba(0, 0, 0, 0.4) !important; border: 1px dashed rgba(255, 255, 255, 0.2) !important; color: rgba(255, 255, 255, 0.5) !important; cursor: not-allowed; font-size: 0.75em; }
-
-/* ── 채팅 메시지 버튼 ── */
-.cat-msg-btns { display: inline-flex; gap: 8px; margin-left: 10px; align-items: center; vertical-align: middle; }
-.cat-btn-trans { cursor: pointer; font-size: 1.3em; transition: 0.2s; filter: drop-shadow(0 0 2px rgba(255, 165, 0, 0.5)); transform-origin: center; display: inline-block; }
-.cat-btn-revert { cursor: pointer; color: #ffb4a2; opacity: 0.4; font-size: 1em; transition: 0.2s; }
-.cat-btn-revert:hover { opacity: 1; transform: rotate(-45deg); }
-
-/* ── 입력창 버튼 (칸 맞춤 2px 광폭화 유지) ── */
-#cat-input-container { display: flex; align-items: center; justify-content: center; gap: 4px; margin-right: 5px; padding-left: 2px; height: 100%; }
-#cat-input-trans { cursor: pointer; font-size: 1.6em; transition: 0.2s; filter: drop-shadow(0 0 2px rgba(255, 165, 0, 0.5)); transform-origin: center; display: inline-block; line-height: 1; }
-#cat-input-revert { cursor: pointer; color: gray; font-size: 1.2em; transition: 0.2s; padding-right: 2px; line-height: 1; }
-#cat-input-revert:hover { color: white; transform: rotate(-45deg); }
-
-/* ── 📝 [NEW] 수정창(Edit Window) 번역 버튼 애니메이션 ── */
-.cat-edit-trans:hover { transform: scale(1.1); filter: drop-shadow(0 0 5px #ff9f43) !important; }
-
-/* ── 발광 애니메이션 (진한 오렌지 유지) ── */
-.cat-glow-active { animation: cat-pulse-glow 0.8s infinite alternate ease-in-out; filter: drop-shadow(0 0 15px #ff8c00) brightness(1.2) !important; }
-@keyframes cat-pulse-glow {
-    0%   { transform: scale(1);    filter: drop-shadow(0 0  5px #ff9f43) brightness(1);   }
-    100% { transform: scale(1.08); filter: drop-shadow(0 0 25px #ff7300) brightness(1.4); }
+.cat-setting-row { margin-bottom: 8px; }
+.cat-setting-row > label { display: block; font-size: 0.85em; font-weight: bold; margin-bottom: 2px; }
+#cat-drawer-header { display: flex !important; align-items: center !important; justify-content: space-between !important; cursor: pointer !important; padding: 0.5em 0.8em !important; min-height: 3em !important; }
+#cat-drawer-header .inline-drawer-title { display: flex; align-items: center; gap: 10px; flex: 1; font-size: 1.1em; }
+#cat-drawer-toggle { transition: transform 0.2s ease-in-out; opacity: 0.7; }
+#cat-save-btn { background-color: rgba(168, 199, 250, 0.15); border: 1px solid #a8c7fa; color: #a8c7fa; padding: 10px; border-radius: 8px; width: 100%; font-weight: bold; cursor: pointer; }
+.cat-emoji-icon { display: inline-block; line-height: 1; transition: all 0.2s; will-change: transform, filter; transform: translateZ(0); -webkit-backface-visibility: hidden; }
+.cat-glow-anim { animation: cat-calm-pulse 1.2s infinite alternate ease-in-out !important; border-radius: 50%; }
+@keyframes cat-calm-pulse {
+    0% { transform: scale(1) translateZ(0); filter: drop-shadow(0 0 2px rgba(255, 204, 0, 0.5)); }
+    100% { transform: scale(1.2) translateZ(0); filter: drop-shadow(0 0 12px rgba(255, 215, 0, 0.9)); background-color: rgba(255, 215, 0, 0.2); }
 }
-
-/* ── 팝업 알림 (최상위 계급) ── */
-.cat-notification {
-    position: fixed; bottom: -80px; left: 50%; transform: translateX(-50%);
-    padding: 12px 25px; border-radius: 30px; color: white; font-weight: bold;
-    z-index: 2147483647 !important; transition: bottom 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.4); white-space: nowrap;
-}
-.cat-notification.show { bottom: 80px; }
+.cat-notification { position: fixed; top: -60px; left: 50%; transform: translateX(-50%); padding: 12px 24px; border-radius: 30px; color: white; font-weight: bold; font-size: 14px; z-index: 2147483647 !important; box-shadow: 0 4px 15px rgba(0,0,0,0.3); transition: top 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); pointer-events: none; white-space: nowrap; max-width: 85vw; overflow: hidden; text-overflow: ellipsis; text-align: center; }
+.cat-notification.show { top: 25px; }
 
 /* ── 드래그 사전 팝업 ── */
 .cat-quick-paw {
@@ -54,16 +25,5 @@
 }
 @keyframes cat-bounce { from { transform: translateY(0); } to { transform: translateY(-8px); } }
 
-/* ── 🚀 전체 번역 미니 팝업 (소넷 추가 기능 유지) ── */
-#cat-batch-popup {
-    position: absolute; display: flex; flex-direction: column; gap: 4px;
-    background: rgba(30, 30, 30, 0.97); border: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 12px; padding: 8px 6px; z-index: 2147483647;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.5); min-width: 110px; animation: cat-popup-in 0.15s ease;
-}
-@keyframes cat-popup-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-.cat-batch-option {
-    cursor: pointer; padding: 6px 12px; border-radius: 8px; font-size: 0.9em; color: white;
-    transition: background 0.15s; white-space: nowrap; text-align: center;
-}
-.cat-batch-option:hover { background: rgba(255, 159, 67, 0.3); }
+/* ── 📝 [NEW] 수정창(Edit Window) 번역 버튼 애니메이션 ── */
+.cat-edit-trans:hover { transform: scale(1.1); filter: drop-shadow(0 0 5px #ff9f43) !important; }
