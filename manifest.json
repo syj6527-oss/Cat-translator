@@ -4,10 +4,6 @@
     "description": "실리태번용 AI 번역 확장 (Gemini API 연동)",
     "author": "cat-translator",
     "homePage": "",
-    "js": {
-        "main.js": 1
-    },
-    "css": {
-        "style.css": 1
-    }
+    "js": ["main.js"],
+    "css": ["style.css"]
 }
