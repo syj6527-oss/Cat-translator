@@ -1,9 +1,9 @@
 {
-    "name": "cat-translator",
-    "display_name": "🐱 트랜스레이터",
-    "version": "18.0.7",
-    "description": "호랑이 각성: RP 몰입 번역 어시스턴트",
+    "name": "cat-translator-beta",
+    "display_name": "🐯 트랜스레이터 Beta",
+    "version": "18.1.0",
+    "description": "호랑이 각성: 맞춤형 튜닝 UI & 스마트 자동번역",
     "author": "냥헴 & GPT & Claude",
-    "js": "index.js",
+    "module": "index.js",
     "css": "style.css"
 }
