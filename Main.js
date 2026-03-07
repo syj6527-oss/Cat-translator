@@ -207,8 +207,8 @@ jQuery(async () => {
     // ③ 채팅 버튼 초기 주입
     runInjectButtons();
 
-    // ④ 드래그 사전 즉시 등록 기능 활성화
-    setupQuickAdd(settings);
+    // ④ 드래그 사전 즉시 등록 기능 활성화 (순환 참조 방지를 위해 함수 직접 주입)
+    setupQuickAdd(settings, catNotify, saveSettings);
 
     // ⑤ MutationObserver: 새 메시지가 DOM에 추가될 때마다 버튼 자동 주입
     const chatEl = document.getElementById('chat');
