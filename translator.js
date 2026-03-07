@@ -85,8 +85,8 @@ export async function callGemini(prompt, settings) {
     const apiKey = settings.customKey || secret_state[SECRET_KEYS.MAKERSUITE];
     if (!apiKey) throw new Error("API Key Missing");
 
-    // 실리태번 현재 연결 모델을 fallback으로 사용
-    const activeModel  = window.extension_settings?.makersuite?.model || 'gemini-1.5-flash';
+    // directModel: 사용자가 설정창에서 선택한 모델 사용
+    const activeModel  = settings.directModel || 'gemini-2.0-flash';
     const apiVer       = activeModel.includes('2.0') ? 'v1alpha' : 'v1beta';
     const outputTokens = settings.maxTokens === 0 ? 8192 : settings.maxTokens;
 
