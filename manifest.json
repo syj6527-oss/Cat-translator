@@ -1,9 +1,9 @@
 {
-    "display_name": "🐱 캣 트랜스레이터",
-    "version": "19.0.0",
-    "description": "실리태번용 AI 번역 확장 (Gemini API 연동)",
-    "author": "cat-translator",
-    "homePage": "",
-    "js": ["main.js"],
-    "css": ["style.css"]
+    "name": "cat-translator-pro",
+    "display_name": "🐱 캣 트랜스레이터 (v19.1 Ultimate)",
+    "version": "19.1.0",
+    "description": "수정창 번역 지원, IndexedDB 기반 무제한 토큰 절약 사전 도입, 모듈 단일화 최적화",
+    "author": "냥헴 & GPT",
+    "js": "index.js",
+    "css": "style.css"
 }
