@@ -4,6 +4,6 @@
     "version": "18.0.0",
     "description": "The Ultimate Token Saver & RP Optimizer Engine (Tiger Awakening)",
     "author": "냥헴 & 천재개발자",
-    "module": "index.js",
+    "js": "index.js",
     "css": "style.css"
 }
