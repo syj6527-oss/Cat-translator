@@ -4,9 +4,22 @@
 // =============================================
 
 import { secret_state, SECRET_KEYS } from '../../../../scripts/secrets.js';
+import { getContext }                 from '../../../../scripts/extensions.js';
 import { dbGet, dbPut }               from './cache.js';
 import { applyDictionary }            from './dictionary.js';
-import { catNotify }                  from './ui.js';
+
+// ── 순환 참조 방지: catNotify를 직접 정의 ──────
+// (ui.js ↔ translator.js 순환 import 방지용)
+function catNotify(msg, type = 'success') {
+    $('.cat-notification').remove();
+    let bgColor = '#2ecc71';
+    if (type === 'warning') bgColor = '#f1c40f';
+    if (type === 'danger')  bgColor = '#e74c3c';
+    const el = $(`<div class="cat-notification cat-native-font" style="background-color:${bgColor};">${msg}</div>`);
+    $('body').append(el);
+    setTimeout(() => el.addClass('show'), 50);
+    setTimeout(() => { el.removeClass('show'); setTimeout(() => el.remove(), 500); }, 3000);
+}
 
 // ── 🔒 절대 방어막 코어 ────────────────────
 // AI가 번역 외 출력(설명, 대안 제시 등)을 못 하도록 막는 시스템 프롬프트
@@ -51,17 +64,29 @@ export function getSmartTargetLanguage(text, targetLang) {
 // prompt: 완성된 번역 프롬프트 문자열
 // settings: 현재 설정 (모델, 온도, 토큰 등)
 export async function callGemini(prompt, settings) {
-    // API 키: 직접 입력 키 우선, 없으면 실리태번 프리필 키 사용
+    const stContext = getContext();
+
+    // ── 프리필 모드: 사용자가 선택한 실리태번 프리필 사용 ──
+    // modelId가 'direct'가 아니면 프리필로 연결
+    if (settings.modelId !== 'direct') {
+        if (stContext?.ConnectionManagerRequestService) {
+            const response = await stContext.ConnectionManagerRequestService.sendRequest(
+                settings.modelId, // 선택된 프리필 ID
+                [{ role: "user", content: prompt }],
+                settings.maxTokens === 0 ? 8192 : settings.maxTokens
+            );
+            // 응답 형태가 string이면 그대로, 객체면 content 추출
+            return typeof response === 'string' ? response : (response?.content || "");
+        }
+        throw new Error("ConnectionManagerRequestService를 찾을 수 없어요!");
+    }
+
+    // ── 직접 연결 모드: API 키로 Gemini 직접 호출 ──
     const apiKey = settings.customKey || secret_state[SECRET_KEYS.MAKERSUITE];
     if (!apiKey) throw new Error("API Key Missing");
 
-    // 모델이 'st-profile'이면 실리태번 현재 연결 모델 사용
-    let activeModel = settings.modelId;
-    if (activeModel === 'st-profile') {
-        activeModel = window.extension_settings?.makersuite?.model || 'gemini-1.5-flash';
-    }
-
-    // 2.0 모델은 v1alpha, 나머지는 v1beta 사용
+    // 실리태번 현재 연결 모델을 fallback으로 사용
+    const activeModel  = window.extension_settings?.makersuite?.model || 'gemini-1.5-flash';
     const apiVer       = activeModel.includes('2.0') ? 'v1alpha' : 'v1beta';
     const outputTokens = settings.maxTokens === 0 ? 8192 : settings.maxTokens;
 
