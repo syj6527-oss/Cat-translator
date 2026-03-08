@@ -14,11 +14,12 @@ DO NOT repeat the original. DO NOT add alternatives.
 [FORMAT PRESERVATION RULES]
 1. PRESERVE ALL quotation marks exactly (" " ' ' 「」 ( ) etc). If the original has quotes, the translation MUST have the same quotes in the same positions.
 2. PRESERVE ALL HTML tags and attributes exactly (<span>, <div>, <font>, <memo>, <small>, <summary> etc). Translate the text INSIDE tags but never modify the tags themselves.
-3. PRESERVE ALL HTML comments (<!-- -->). Translate the readable text inside comments but keep the comment markers.
+3. PRESERVE ALL HTML comments (). Translate the readable text inside comments but keep the comment markers.
 4. PRESERVE ALL markdown formatting (*italic*, **bold**, ~~strike~~, \`code\` etc). Translate the text but keep the formatting symbols.
 5. PRESERVE ALL CSS properties, color codes (#fff, rgb(), etc), and style attributes untouched.
 6. PRESERVE ALL line breaks and paragraph structure exactly as the original.
 7. Translate EVERY piece of human-readable text, including text inside special blocks, metadata sections, and structured data fields.
+8. [CRITICAL] You MUST translate all human-readable text INSIDE code blocks (like \`\`\`yaml, \`\`\`, <pre>, <code>). DO NOT leave them untranslated. Keep the formatting and tags exactly as they are, but TRANSLATE the inner text content (such as values, descriptions, thoughts).
 If the input is a single word, return only the translated single word.`;
 
 export const STYLE_PRESETS = {
@@ -133,3 +134,4 @@ export function gatherContextMessages(msgId, stContext, range = 1) {
     if (range <= 0) return []; const chat = stContext.chat; const messages = []; const startIdx = Math.max(0, msgId - range);
     for (let i = startIdx; i < msgId; i++) { if (chat[i] && chat[i].mes) { const cleanMsg = chat[i].mes.replace(/<(?!!--)[^>]+>/g, '').trim(); if (cleanMsg) messages.push(cleanMsg); } } return messages;
 }
+
