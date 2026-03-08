@@ -219,27 +219,25 @@ function showBulkPopup(event, settings, stContext, processMessageFn) {
         <div class="cat-bulk-option" data-count="50">📚 최근 50</div>
     </div>`);
     
-    // ⚡ 버튼 바로 위에 팝업 배치
     const btn = document.getElementById('cat-bulk-btn');
     if (!btn) return;
-    const rect = btn.getBoundingClientRect();
-    const popupHeight = 180; // 대략적 팝업 높이
     
-    // 위에 공간 없으면 아래로
-    const spaceAbove = rect.top;
-    if (spaceAbove > popupHeight) {
-        popup.css({ position: 'fixed', bottom: (window.innerHeight - rect.top + 8) + 'px', left: Math.max(4, rect.left - 40) + 'px', zIndex: 2147483647 });
-    } else {
-        popup.css({ position: 'fixed', top: (rect.bottom + 8) + 'px', left: Math.max(4, rect.left - 40) + 'px', zIndex: 2147483647 });
-    }
-    
+    // [버그 수정 2] 먼저 DOM에 붙인 후, 위치 계산
     $('body').append(popup);
+    const rect = btn.getBoundingClientRect();
     
-    // 🚨 즉시 닫힘 방지 플래그
+    popup.css({ 
+        position: 'fixed', 
+        bottom: Math.max(70, window.innerHeight - rect.top + 10) + 'px', 
+        left: Math.max(10, rect.left - 40) + 'px', 
+        zIndex: 2147483647 
+    });
+    
+    // 즉시 닫힘 방지 플래그
     let _bulkJustOpened = true;
-    setTimeout(() => { _bulkJustOpened = false; }, 300);
+    setTimeout(() => { _bulkJustOpened = false; }, 100);
     
-    // 팝업 자체에서 이벤트 전파 차단 (모바일 터치 대응)
+    // 팝업 자체에서 이벤트 전파 차단
     popup.on('touchstart click', (e) => { e.stopPropagation(); });
     
     // 옵션 클릭
@@ -251,7 +249,7 @@ function showBulkPopup(event, settings, stContext, processMessageFn) {
         await executeBulkTranslation(count, settings, stContext, processMessageFn);
     });
     
-    // 외부 클릭 닫기 (500ms 후 등록 — 모바일 터치 이벤트 소화 대기)
+    // 외부 클릭 닫기
     setTimeout(() => {
         $(document).on('click.catBulkClose touchstart.catBulkClose', (e) => {
             if (_bulkJustOpened) return;
@@ -260,7 +258,7 @@ function showBulkPopup(event, settings, stContext, processMessageFn) {
                 $(document).off('click.catBulkClose touchstart.catBulkClose');
             }
         });
-    }, 500);
+    }, 100);
 }
 
 async function executeBulkTranslation(count, settings, stContext, processMessageFn) {
@@ -405,3 +403,4 @@ export function setupMutationObserver(processMessageFn, revertMessageFn, setting
     observer.observe(chatContainer, { childList: true, subtree: true });
     injectMessageButtons(processMessageFn, revertMessageFn); injectInputButtons(settings, stContext, processMessageFn); setInterval(() => injectInputButtons(settings, stContext, processMessageFn), 2000);
 }
+
