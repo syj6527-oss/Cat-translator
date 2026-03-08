@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Cat Translator v18.2.3 - ui.js (디자인 & 감성 디테일 끝판왕)
+// 🐱 Cat Translator v18.2.4 - ui.js (디자인 & 감성 디테일 & 모달)
 // ============================================================
 import { catNotify, catNotifyProgress, getThemeEmoji, getCompletionEmoji, getModelTheme, setTextareaValue } from './utils.js';
 import { getStats, clearAllCache, exportSettings, importSettings, getHistory, togglePin } from './cache.js';
@@ -21,11 +21,11 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
     
     const dictIcon = (settings.dictionary && settings.dictionary.trim()) ? '📬' : '📭';
 
-    // 🚨 토큰 라벨 간소화 및 MAX 8192 placeholder 추가
+    // 🚨 버튼 반갈죽 UI 적용
     const html = `
     <div id="cat-trans-container" class="inline-drawer">
         <div id="cat-drawer-header" class="inline-drawer-header interactable" tabindex="0">
-            <div class="inline-drawer-title"><span class="cat-theme-emoji">🐱</span><span>트랜스레이터 Beta v18.2.3</span></div>
+            <div class="inline-drawer-title"><span class="cat-theme-emoji">🐱</span><span>트랜스레이터 Beta v18.2.4</span></div>
             <i id="cat-drawer-toggle" class="inline-drawer-toggle fa-solid fa-chevron-down"></i>
         </div>
         <div id="cat-drawer-content" class="inline-drawer-content" style="display:none; padding:10px;">
@@ -65,7 +65,12 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
                 <textarea id="ct-dictionary" class="text_pole" rows="3" placeholder="Ghost=고스트&#10;Soap=소프">${settings.dictionary || ''}</textarea>
             </div>
             <div id="ct-cache-stats" class="cat-stats-bar"><span id="ct-cache-icon" style="font-size:1.3em;">🗂️</span> 캐시 히트율: ${statsData.hitRate}% | 절약 토큰: ~${statsData.tokensSaved.toLocaleString()}</div>
-            <button id="ct-clear-cache" class="menu_button cat-btn-secondary" style="margin-top:4px; width:100%; font-size:1em;">🗑️ 캐시 전체 삭제</button>
+            
+            <div style="display:flex; gap:8px; margin-top:8px;">
+                <button id="ct-clear-cache" class="menu_button cat-btn-secondary" style="flex:1; font-size:0.95em; padding:8px;">🗑️ 캐시 삭제</button>
+                <button id="ct-reset-settings" class="menu_button cat-btn-secondary" style="flex:1; font-size:0.95em; padding:8px;">🔄 설정 초기화</button>
+            </div>
+            
             <div style="display:flex; gap:8px; margin-top:8px;">
                 <button id="ct-export" class="menu_button cat-btn-secondary" style="flex:1;">📤 내보내기</button><button id="ct-import-btn" class="menu_button cat-btn-secondary" style="flex:1;">📥 가져오기</button>
                 <input type="file" id="ct-import-file" accept=".json" style="display:none;">
@@ -75,11 +80,10 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
 
     $('#extensions_settings').append(html);
 
-    // 🚨 마스터 튜닝: 테마(고양이/호랑이)에 맞춰 동적으로 물고기/고기 아이콘 출력!
     const triggerAutoSave = (silent = false) => {
         saveSettingsFn();
         if (!silent) {
-            const saveIcon = getCompletionEmoji(); // 호랑이면 🍖, 고양이면 🐟 반환
+            const saveIcon = getCompletionEmoji(); 
             catNotify(`${saveIcon} 설정이 자동 저장되었습니다.`, "success");
         }
     };
@@ -112,7 +116,6 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
         } else {
             applyTheme('cat', true);
         }
-        
         triggerAutoSave(true); 
     });
 
@@ -127,6 +130,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
     }).on('blur', () => triggerAutoSave(false));
     
     $('#ct-dict-reset').on('click', async function() {
+        if (!confirm("정말 사전을 모두 비우고 번역 캐시를 삭제하시겠습니까?")) return;
         $('#ct-dictionary').val(''); settings.dictionary = ''; saveSettingsFn();
         $(this).text('📭');
         await clearAllCache(); updateCacheStats();
@@ -135,27 +139,57 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
     
     $('#ct-user-prompt, #ct-key').on('blur', () => triggerAutoSave(false));
     
-    // 🚨 칸을 비웠을 때 Placeholder가 보이도록 허용하면서 자동 저장!
     $('#ct-max-tokens').on('change', function () {
-        if ($(this).val() === '') {
-            triggerAutoSave(false);
-            return; 
-        }
+        if ($(this).val() === '') { triggerAutoSave(false); return; }
         triggerAutoSave(false);
     });
 
     $('#ct-context-range').on('change', function () { 
-        if ($(this).val() === '') {
-            triggerAutoSave(false);
-            return; 
-        }
+        if ($(this).val() === '') { triggerAutoSave(false); return; }
         let val = parseInt($(this).val()) || 0; 
         val = Math.min(4, Math.max(0, val)); 
         $(this).val(val); 
         triggerAutoSave(false);
     });
 
-    $('#ct-clear-cache').on('click', async () => { await clearAllCache(); updateCacheStats(); catNotify(`${getThemeEmoji()} 캐시 전체 삭제 완료! 📂`, "success"); });
+    // 🚨 캐시 삭제 모달창
+    $('#ct-clear-cache').on('click', async () => { 
+        if (confirm("정말 번역 캐시를 전부 삭제하시겠습니까?\n(이 작업은 되돌릴 수 없습니다)")) {
+            await clearAllCache(); 
+            updateCacheStats(); 
+            catNotify(`${getThemeEmoji()} 캐시 전체 삭제 완료! 📂`, "success"); 
+        }
+    });
+
+    // 🚨 안전한 설정 초기화 (사전 & API Key 보호)
+    $('#ct-reset-settings').on('click', () => {
+        if (confirm("설정을 기본값으로 초기화하시겠습니까?\n(🚨 안심하세요! API Key와 우편함 사전은 유지됩니다)")) {
+            const savedKey = settings.customKey;
+            const savedDict = settings.dictionary;
+            const defaultValues = { profile: '', directModel: 'gemini-1.5-flash', customModelName: '', autoMode: 'none', targetLang: 'Korean', style: 'normal', temperature: 0.3, maxTokens: 8192, contextRange: 1, userPrompt: '' };
+            
+            Object.assign(settings, defaultValues);
+            settings.customKey = savedKey;
+            settings.dictionary = savedDict;
+            
+            $('#ct-profile').val(settings.profile);
+            $('#ct-key').val(settings.customKey);
+            $('#ct-model').val(settings.directModel);
+            $('#ct-model-custom').val(settings.customModelName).hide();
+            $('#ct-auto-mode').val(settings.autoMode);
+            $('#ct-lang').val(settings.targetLang);
+            $('#ct-style').val(settings.style);
+            $('#ct-temperature').val(settings.temperature);
+            $('#ct-max-tokens').val(settings.maxTokens);
+            $('#ct-context-range').val(settings.contextRange);
+            $('#ct-user-prompt').val(settings.userPrompt);
+            
+            saveSettingsFn();
+            applyTheme('cat', true);
+            catNotify(`${getThemeEmoji()} 옵션 설정이 초기화되었습니다.`, "success");
+        }
+    });
+
     $('#ct-export').on('click', () => { saveSettingsFn(); exportSettings(settings); catNotify(`${getThemeEmoji()} 설정 내보내기 완료!`, "success"); });
     $('#ct-import-btn').on('click', () => $('#ct-import-file').click());
     $('#ct-import-file').on('change', async function () { const file = this.files[0]; if (!file) return; try { const imported = await importSettings(file); Object.assign(settings, imported); saveSettingsFn(); catNotify(`${getThemeEmoji()} 설정 가져오기 완료! 새로고침하면 적용됩니다.`, "success"); } catch (e) { catNotify(`${getThemeEmoji()} 오류: ${e.message}`, "error"); } this.value = ''; });
@@ -178,7 +212,7 @@ export function collectSettings() {
         customModelName: $('#ct-model-custom').val() || '', autoMode: $('#ct-auto-mode').val() || 'none',
         targetLang: $('#ct-lang').val() || 'Korean', style: $('#ct-style').val() || 'normal',
         temperature: parseFloat($('#ct-temperature').val()) || 0.3, 
-        maxTokens: isNaN(parsedTokens) ? 8192 : parsedTokens, // 빈칸이면 8192 토큰 기본값 적용
+        maxTokens: isNaN(parsedTokens) ? 8192 : parsedTokens,
         contextRange: isNaN(parsedContext) ? 1 : Math.min(4, Math.max(0, parsedContext)),
         userPrompt: $('#ct-user-prompt').val() || '', dictionary: $('#ct-dictionary').val() || ''
     };
