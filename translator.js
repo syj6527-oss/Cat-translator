@@ -124,13 +124,21 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
         return { text: cleaned, lang: targetLang, fromCache: false };
     } catch (e) {
         if (e.name === 'AbortError') return null;
-        const errMsg = e.message || '알 수 없는 오류'; catNotify(`${getThemeEmoji()} 오류: ${errMsg}`, "error"); return null;
+        const errMsg = e.message || '알 수 없는 오류';
+        // Vertex 모델 실패 시 프로젝트 ID/리전 입력 안내
+        if (isVertexModel && !settings.vertexProject) {
+            $('#ct-vertex-extra').slideDown(200);
+            catNotify(`🚨 Vertex 연결 실패! 프로젝트 ID와 리전을 입력해보세요.`, "error");
+        } else {
+            catNotify(`${getThemeEmoji()} 오류: ${errMsg}`, "error");
+        }
+        return null;
     }
 }
 
 function assemblePrompt(text, targetLang, isToEnglish, settings, options = {}) {
     const { prevTranslation, contextMessages = [] } = options;
-    if (text.length < 50 && !prevTranslation && contextMessages.length === 0 && (!settings.dictionary || !settings.dictionary.trim())) {
+    if (text.length < 100 && !prevTranslation && contextMessages.length === 0 && (!settings.dictionary || !settings.dictionary.trim())) {
         const lang = isToEnglish ? 'English' : targetLang; return `${text}\n\n(Translate the above to ${lang}. Reply with ONLY the translation. Keep all formatting exactly.)`;
     }
     let parts = [SYSTEM_SHIELD];

@@ -65,7 +65,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
                 <div class="cat-setting-row" style="width:80px;"><label>온도</label><input type="number" id="ct-temperature" class="text_pole" value="${settings.temperature || ''}" min="0" max="1" step="0.1" placeholder="0.0~1.0"></div>
             </div>
             <div style="display:flex; gap:8px;">
-                <div class="cat-setting-row" style="flex:1;"><label>토큰</label><input type="number" id="ct-max-tokens" class="text_pole" value="${settings.maxTokens || ''}" min="256" max="65536" step="256" placeholder="최대 65536"></div>
+                <div class="cat-setting-row" style="flex:1;"><label>토큰</label><input type="number" id="ct-max-tokens" class="text_pole" value="${settings.maxTokens || ''}" min="256" max="20000" step="256" placeholder="권장 8192"></div>
                 <div class="cat-setting-row" style="width:100px;"><label>문맥 범위</label><input type="number" id="ct-context-range" class="text_pole" value="${settings.contextRange || ''}" min="0" max="6" step="1" placeholder="최대 6"></div>
             </div>
             <div class="cat-setting-row"><label>시스템 보호막 (🔒 고정)</label><textarea id="ct-shield" class="text_pole cat-readonly-area" rows="3" readonly>${SYSTEM_SHIELD}</textarea></div>
@@ -95,12 +95,8 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
     $('#ct-key-toggle').on('click', () => { const i = $('#ct-key'); i.attr('type', i.attr('type') === 'password' ? 'text' : 'password'); });
     $('#ct-vertex-key-toggle').on('click', () => { const i = $('#ct-vertex-key'); i.attr('type', i.attr('type') === 'password' ? 'text' : 'password'); });
     
-    // Vertex 키 입력 시 추가 필드 표시
-    $('#ct-vertex-key').on('input', function () {
-        const hasKey = $(this).val().trim().length > 0;
-        $('#ct-vertex-extra').toggle(hasKey);
-    });
-    if ((settings.vertexKey || '').trim()) $('#ct-vertex-extra').show();
+    // Vertex 추가 필드: 이미 프로젝트ID가 저장되어 있을 때만 표시 (실패 시 자동 노출됨)
+    if ((settings.vertexProject || '').trim()) $('#ct-vertex-extra').show();
     $('#ct-vertex-region').val(settings.vertexRegion || 'global');
     
     // 🚨 자동 저장 디바운스 시스템
@@ -346,7 +342,7 @@ async function executeBulkTranslation(count, settings, stContext, processMessage
         await processMessageFn(msgId, isUser, bulkAbortController.signal, true);
         completed++;
         if (progressEl.length) progressEl.text(`${getThemeEmoji()} 벌크 번역 중... (${completed}/${total}) [클릭시 중단]`);
-        if (!bulkAbortController.signal.aborted) await new Promise(r => setTimeout(r, 700));
+        if (!bulkAbortController.signal.aborted) await new Promise(r => setTimeout(r, 300));
     }
     progressEl.remove(); $('#cat-bulk-btn').html('<span class="cat-emoji-icon">⚡</span>');
     $('#cat-bulk-btn').off('click').on('click', (e) => { e.preventDefault(); e.stopPropagation(); showBulkPopup(e, settings, stContext, processMessageFn); });

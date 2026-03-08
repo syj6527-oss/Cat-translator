@@ -14,19 +14,37 @@ export function getCompletionEmoji() {
 }
 
 export function catNotify(message, type = 'success') {
-    $('.cat-notification').remove();
+    // 같은 내용 중복 알림 방지
+    const existing = $('.cat-notification');
+    let isDuplicate = false;
+    existing.each(function() { if ($(this).text() === message) isDuplicate = true; });
+    if (isDuplicate) return existing.first();
+    
+    // 최대 3개까지만 스택, 오래된 것부터 제거
+    if (existing.length >= 3) existing.first().removeClass('show').remove();
+    
     const emoji = getThemeEmoji();
     const colors = { success: '#2ecc71', warning: '#f39c12', error: '#e74c3c', progress: '#f39c12', autosave: '#1e8449' };
     const bgColor = colors[type] || colors.success;
     const displayMsg = message.replace(/^(🐱|🐯)\s*/, `${emoji} `);
     const notifyHtml = $(`<div class="cat-notification cat-native-font" style="background-color: ${bgColor};">${displayMsg}</div>`);
     $('body').append(notifyHtml);
-    requestAnimationFrame(() => notifyHtml.addClass('show'));
+    
+    // 스택 위치 계산: 기존 알림들 아래에 쌓기
+    const _recalcStack = () => {
+        let topOffset = 20;
+        $('.cat-notification.show').each(function() {
+            $(this).css('top', topOffset + 'px');
+            topOffset += $(this).outerHeight() + 8;
+        });
+    };
+    
+    requestAnimationFrame(() => { notifyHtml.addClass('show'); _recalcStack(); });
 
     if (type !== 'progress') {
         setTimeout(() => {
             notifyHtml.removeClass('show');
-            setTimeout(() => notifyHtml.remove(), 500);
+            setTimeout(() => { notifyHtml.remove(); _recalcStack(); }, 500);
         }, 2500);
     }
     return notifyHtml;
