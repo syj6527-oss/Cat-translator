@@ -1,8 +1,8 @@
 // ============================================================
-// 🐱 Cat Translator v18.2.5 - index.js
+// 🐱 Cat Translator v18.3.2 - index.js
 // ============================================================
 import { extension_settings, getContext } from '../../../../scripts/extensions.js';
-import { getThemeEmoji, getModelTheme } from './utils.js';
+import { getModelTheme } from './utils.js';
 import { initCache } from './cache.js';
 import { setupSettingsPanel, collectSettings, updateCacheStats, setupMutationObserver, applyTheme } from './ui.js';
 
@@ -18,19 +18,14 @@ function saveSettings() {
     applyTheme(getModelTheme(settings.directModel)); updateCacheStats();
 }
 
-// 🚨 핵심: 업데이트 시 설정창 강제 주입 로직 보강
 jQuery(async () => {
     try { 
         await initCache(); 
-        // 1. 테마 적용
         applyTheme(getModelTheme(settings.directModel));
-        // 2. 설정창 주입 (이 함수가 호출되어야 설정창이 보입니다!)
+        // 설정창 강제 주입
         setupSettingsPanel(settings, stContext, saveSettings); 
-        // 3. UI 관찰자 시작
-        setupMutationObserver(null, null, settings, stContext); // 실제 함수 전달 필요
-        console.log('[CAT] 🐯 Cat Translator Beta v18.2.5 로드 완료!');
-    } catch (e) { 
-        console.error('[CAT] 초기화 실패:', e); 
-    }
+        // UI 관찰자 및 버튼 주입 시작
+        setupMutationObserver(null, null, settings, stContext); 
+        console.log('[CAT] 🐯 Cat Translator v18.3.2 통합본 로드 완료!');
+    } catch (e) { console.error('[CAT] 로드 에러:', e); }
 });
-
