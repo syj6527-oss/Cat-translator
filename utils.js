@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Cat Translator v18.5.2 - utils.js (전체 로직 보존)
+// 🐱 Cat Translator v18.1.0 - utils.js
 // 유틸리티: 알림, 정규식 세탁기, HTML/CSS 방어, 언어 감지
 // ============================================================
 
@@ -16,7 +16,7 @@ export function getCompletionEmoji() {
 export function catNotify(message, type = 'success') {
     $('.cat-notification').remove();
     const emoji = getThemeEmoji();
-    const colors = { success: '#2ecc71', warning: '#f39c12', error: '#e74c3c', progress: '#f39c12' };
+    const colors = { success: '#2ecc71', warning: '#f39c12', error: '#e74c3c', progress: '#f39c12', autosave: '#1e8449' };
     const bgColor = colors[type] || colors.success;
     const displayMsg = message.replace(/^(🐱|🐯)\s*/, `${emoji} `);
     const notifyHtml = $(`<div class="cat-notification cat-native-font" style="background-color: ${bgColor};">${displayMsg}</div>`);
@@ -41,11 +41,18 @@ export function catNotifyProgress(message, onAbort) {
     return el;
 }
 
-// 🚨 마스터 요청 반영: 코드블록 내부 텍스트 및 YAML 들여쓰기 증발 완벽 방어!
+// 🚨 마스터 요청: 코드블록 내부 텍스트 및 YAML 들여쓰기 증발 완벽 방어!
 export function cleanResult(text) {
     if (!text) return "";
-    // 불필요한 번역 접두사만 제거하고 원본(코드박스 포함)은 절대 건드리지 않음
-    return text.replace(/^(번역|Translation|Output|Input|Result):\s*/gi, "").trim();
+    
+    let cleaned = text.replace(/^(번역|Translation|Output|Input|Result):\s*/gi, "");
+    
+    const wholeCodeBlockMatch = cleaned.match(/^```[a-z]*\n([\s\S]*?)\n```$/i);
+    if (wholeCodeBlockMatch) {
+        cleaned = wholeCodeBlockMatch[1];
+    }
+
+    return cleaned.trim();
 }
 
 export function getCacheModelKey(settings) {
@@ -58,6 +65,10 @@ export function getModelTheme(modelName) {
     const lower = modelName.toLowerCase();
     if (lower.includes('pro') || lower.includes('프로') || lower.includes('호랑이') || lower.includes('tiger')) return 'tiger';
     if (lower.includes('flash') || lower.includes('플래') || lower.includes('플레') || lower.includes('고양이') || lower.includes('cat')) return 'cat';
+    if (lower.includes('vertex')) {
+        if (lower.includes('pro')) return 'tiger';
+        return 'cat';
+    }
     return 'cat';
 }
 

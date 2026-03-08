@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Cat Translator v18.5.2 - ui.js (기능 100% 보존본)
+// 🐱 Cat Translator v18.2.0 - ui.js
 // ============================================================
 import { catNotify, catNotifyProgress, getThemeEmoji, getCompletionEmoji, getModelTheme, setTextareaValue } from './utils.js';
 import { getStats, clearAllCache, exportSettings, importSettings, getHistory, togglePin } from './cache.js';
@@ -21,26 +21,38 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
     
     const dictIcon = (settings.dictionary && settings.dictionary.trim()) ? '📬' : '📭';
 
-    // 🚨 디자인 튜닝: 토큰, MAX 8192, MAX 4, 캐시/초기화 반갈죽 적용
     const html = `
     <div id="cat-trans-container" class="inline-drawer">
         <div id="cat-drawer-header" class="inline-drawer-header interactable" tabindex="0">
-            <div class="inline-drawer-title"><span class="cat-theme-emoji">🐱</span><span>트랜스레이터 Beta v18.5.2</span></div>
+            <div class="inline-drawer-title"><span class="cat-theme-emoji">🐱</span><span>트랜스레이터 Beta v18.3.1</span></div>
             <i id="cat-drawer-toggle" class="inline-drawer-toggle fa-solid fa-chevron-down"></i>
         </div>
         <div id="cat-drawer-content" class="inline-drawer-content" style="display:none; padding:10px;">
             <div class="cat-setting-row"><label>연결 프로필</label><select id="ct-profile" class="text_pole">${profileOptions}</select></div>
             <div id="ct-direct-settings" style="display:${settings.profile === '' ? 'block' : 'none'};">
                 <div class="cat-setting-row" style="position:relative;">
-                    <label>API Key</label>
-                    <input type="password" id="ct-key" class="text_pole" value="${settings.customKey || ''}" style="padding-right:36px;">
+                    <label>API Key (Gemini)</label>
+                    <input type="password" id="ct-key" class="text_pole" value="${settings.customKey}" style="padding-right:36px;">
                     <span id="ct-key-toggle" class="cat-paw-toggle" title="키 보기/숨기기">🐾</span>
+                </div>
+                <div class="cat-setting-row" style="position:relative;">
+                    <label>API Key (Vertex AI) <span style="font-size:0.8em; opacity:0.6;">선택</span></label>
+                    <input type="password" id="ct-vertex-key" class="text_pole" value="${settings.vertexKey || ''}" style="padding-right:36px;">
+                    <span id="ct-vertex-key-toggle" class="cat-paw-toggle" title="키 보기/숨기기">🐾</span>
+                </div>
+                <div id="ct-vertex-extra" style="display:none;">
+                    <div style="display:flex; gap:8px;">
+                        <div class="cat-setting-row" style="flex:1;"><label>프로젝트 ID</label><input type="text" id="ct-vertex-project" class="text_pole" value="${settings.vertexProject || ''}" placeholder="Vertex 연결 실패 시 입력"></div>
+                        <div class="cat-setting-row" style="width:120px;"><label>리전</label><select id="ct-vertex-region" class="text_pole"><option value="global">global</option><option value="us-central1">us-central1</option><option value="europe-west1">europe-west1</option><option value="asia-northeast1">asia-northeast1</option></select></div>
+                    </div>
                 </div>
                 <div class="cat-setting-row">
                     <label>모델</label>
                     <select id="ct-model" class="text_pole">
                         <optgroup label="🐱 고양이 라인 (Flash)"><option value="gemini-1.5-flash">1.5 Flash</option><option value="gemini-2.0-flash">2.0 Flash</option></optgroup>
                         <optgroup label="🐯 호랑이 라인 (Pro)"><option value="gemini-1.5-pro">1.5 Pro</option><option value="gemini-2.0-pro-exp-02-05">2.0 Pro Exp</option></optgroup>
+                        <optgroup label="🐱 Vertex Flash"><option value="vertex-gemini-2.0-flash">Vertex 2.0 Flash</option><option value="vertex-gemini-1.5-flash">Vertex 1.5 Flash</option></optgroup>
+                        <optgroup label="🐯 Vertex Pro"><option value="vertex-gemini-2.0-pro">Vertex 2.0 Pro</option><option value="vertex-gemini-1.5-pro">Vertex 1.5 Pro</option></optgroup>
                         <option value="custom">✏️ 직접 입력...</option>
                     </select>
                     <input type="text" id="ct-model-custom" class="text_pole" placeholder="모델명 직접 입력" style="display:none; margin-top:4px;">
@@ -50,11 +62,11 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
             <div class="cat-setting-row"><label>목표 언어 (AI 기본)</label><select id="ct-lang" class="text_pole">${langOptions}</select></div>
             <div style="display:flex; gap:8px;">
                 <div class="cat-setting-row" style="flex:1;"><label>스타일</label><select id="ct-style" class="text_pole">${styleOptions}</select></div>
-                <div class="cat-setting-row" style="width:80px;"><label>온도</label><input type="number" id="ct-temperature" class="text_pole" value="${settings.temperature || 0.3}" min="0" max="1" step="0.1"></div>
+                <div class="cat-setting-row" style="width:80px;"><label>온도</label><input type="number" id="ct-temperature" class="text_pole" value="${settings.temperature || ''}" min="0" max="1" step="0.1" placeholder="0.0~1.0"></div>
             </div>
             <div style="display:flex; gap:8px;">
-                <div class="cat-setting-row" style="flex:1;"><label>토큰</label><input type="number" id="ct-max-tokens" class="text_pole" value="${settings.maxTokens || 8192}" min="256" max="65536" step="256" placeholder="MAX 8192"></div>
-                <div class="cat-setting-row" style="width:100px;"><label>문맥 범위</label><input type="number" id="ct-context-range" class="text_pole" value="${settings.contextRange || 1}" min="0" max="4" step="1" placeholder="MAX 4"></div>
+                <div class="cat-setting-row" style="flex:1;"><label>토큰</label><input type="number" id="ct-max-tokens" class="text_pole" value="${settings.maxTokens || ''}" min="256" max="65536" step="256" placeholder="최대 65536"></div>
+                <div class="cat-setting-row" style="width:100px;"><label>문맥 범위</label><input type="number" id="ct-context-range" class="text_pole" value="${settings.contextRange || ''}" min="0" max="6" step="1" placeholder="최대 6"></div>
             </div>
             <div class="cat-setting-row"><label>시스템 보호막 (🔒 고정)</label><textarea id="ct-shield" class="text_pole cat-readonly-area" rows="3" readonly>${SYSTEM_SHIELD}</textarea></div>
             <div class="cat-setting-row"><label>추가 지시사항 (사용자 정의)</label><textarea id="ct-user-prompt" class="text_pole" rows="3" placeholder="번역 스타일, 상황극 설정 등 자유롭게 입력">${settings.userPrompt || ''}</textarea></div>
@@ -65,8 +77,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
                 <textarea id="ct-dictionary" class="text_pole" rows="3" placeholder="Ghost=고스트&#10;Soap=소프">${settings.dictionary || ''}</textarea>
             </div>
             <div id="ct-cache-stats" class="cat-stats-bar"><span id="ct-cache-icon" style="font-size:1.3em;">🗂️</span> 캐시 히트율: ${statsData.hitRate}% | 절약 토큰: ~${statsData.tokensSaved.toLocaleString()}</div>
-            
-            <div style="display:flex; gap:8px; margin-top:8px;">
+            <div style="display:flex; gap:8px; margin-top:4px;">
                 <button id="ct-clear-cache" class="menu_button cat-btn-secondary" style="flex:1;">🗑️ 캐시 삭제</button>
                 <button id="ct-reset-settings" class="menu_button cat-btn-secondary" style="flex:1;">🔄 설정 초기화</button>
             </div>
@@ -74,58 +85,95 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
                 <button id="ct-export" class="menu_button cat-btn-secondary" style="flex:1;">📤 내보내기</button><button id="ct-import-btn" class="menu_button cat-btn-secondary" style="flex:1;">📥 가져오기</button>
                 <input type="file" id="ct-import-file" accept=".json" style="display:none;">
             </div>
+            <button id="cat-save-btn" class="menu_button cat-save-button" style="margin-top:10px; width:100%;">설정 저장 및 적용 <span class="cat-theme-emoji">🐱</span></button>
         </div>
     </div>`;
 
     $('#extensions_settings').append(html);
 
-    // 🚨 테마별 동적 자동 저장 알림
-    const triggerAutoSave = (silent = false) => {
-        saveSettingsFn();
-        if (!silent) catNotify(`${getCompletionEmoji()} 설정이 자동 저장되었습니다.`, "success");
-    };
-
     $('#cat-drawer-header').on('click', (e) => { e.stopPropagation(); $('#cat-drawer-content').slideToggle(200); $('#cat-drawer-toggle').toggleClass('fa-chevron-down fa-chevron-up'); });
     $('#ct-key-toggle').on('click', () => { const i = $('#ct-key'); i.attr('type', i.attr('type') === 'password' ? 'text' : 'password'); });
+    $('#ct-vertex-key-toggle').on('click', () => { const i = $('#ct-vertex-key'); i.attr('type', i.attr('type') === 'password' ? 'text' : 'password'); });
     
-    $('#ct-model').val(settings.directModel).on('change', function () { 
-        const val = $(this).val(); $('#ct-model-custom').toggle(val === 'custom'); 
-        if (val !== 'custom') applyTheme(getModelTheme(val), true);
-        triggerAutoSave(true);
+    // Vertex 키 입력 시 추가 필드 표시
+    $('#ct-vertex-key').on('input', function () {
+        const hasKey = $(this).val().trim().length > 0;
+        $('#ct-vertex-extra').toggle(hasKey);
+    });
+    if ((settings.vertexKey || '').trim()) $('#ct-vertex-extra').show();
+    $('#ct-vertex-region').val(settings.vertexRegion || 'global');
+    
+    // 🚨 자동 저장 디바운스 시스템
+    let _autoSaveTimer = null;
+    const autoSave = () => {
+        clearTimeout(_autoSaveTimer);
+        _autoSaveTimer = setTimeout(() => {
+            saveSettingsFn();
+            catNotify(`${getCompletionEmoji()} 설정이 자동 저장되었습니다.`, "autosave");
+        }, 500);
+    };
+    
+    // 모든 설정 필드에 자동 저장 연결
+    $('#ct-profile, #ct-auto-mode, #ct-lang, #ct-style, #ct-temperature, #ct-max-tokens, #ct-context-range, #ct-vertex-region').on('change', autoSave);
+    $('#ct-key, #ct-vertex-key, #ct-vertex-project, #ct-model-custom, #ct-user-prompt, #ct-dictionary').on('input', autoSave);
+    
+    $('#ct-model').val(settings.directModel).on('change', function () {
+        const val = $(this).val();
+        $('#ct-model-custom').toggle(val === 'custom');
+        if (val !== 'custom') {
+            // Vertex 모델이면 Vertex 키 필드 강조
+            if (val.startsWith('vertex-')) {
+                if (!$('#ct-vertex-key').val().trim()) {
+                    catNotify(`⚠️ Vertex 모델 사용 시 Vertex API Key가 필요합니다!`, "warning");
+                }
+            }
+            applyTheme(getModelTheme(val), true);
+        }
+        autoSave();
     });
     $('#ct-model-custom').val(settings.customModelName || '').on('input', function () { applyTheme(getModelTheme($(this).val()), true); });
-    
     $('#ct-profile').val(settings.profile).on('change', function () {
         settings.profile = $(this).val();
         $('#ct-direct-settings').toggle(settings.profile === '');
         const pn = $(this).find('option:selected').text().toLowerCase();
-        if (pn.includes('pro') || pn.includes('프로') || pn.includes('tiger') || pn.includes('호랑이')) applyTheme('tiger', true);
-        else if (pn.includes('flash') || pn.includes('플래') || pn.includes('플레') || pn.includes('cat') || pn.includes('고양이')) applyTheme('cat', true);
-        else if (settings.profile === '') applyTheme(getModelTheme(settings.directModel), true);
-        else applyTheme('cat', true);
-        triggerAutoSave(true);
+        if (pn.includes('pro') || pn.includes('프로') || pn.includes('tiger') || pn.includes('호랑이')) {
+            applyTheme('tiger', true);
+        } else if (pn.includes('flash') || pn.includes('플래') || pn.includes('플레') || pn.includes('cat') || pn.includes('고양이')) {
+            applyTheme('cat', true);
+        } else if (settings.profile === '') {
+            applyTheme(getModelTheme(settings.directModel), true);
+        } else {
+            applyTheme('cat', true);
+        }
     });
-
-    $('#ct-style').val(settings.style || 'normal').on('change', function () { const preset = STYLE_PRESETS[$(this).val()]; if (preset) $('#ct-temperature').val(preset.temperature); triggerAutoSave(false); });
+    $('#ct-style').val(settings.style || 'normal').on('change', function () { const preset = STYLE_PRESETS[$(this).val()]; if (preset) $('#ct-temperature').val(preset.temperature); });
     $('#ct-auto-mode').val(settings.autoMode); $('#ct-lang').val(settings.targetLang); $('#ct-temperature').val(settings.temperature || 0.3);
     
-    $('#ct-auto-mode, #ct-lang, #ct-temperature').on('change', () => triggerAutoSave(false));
-    $('#ct-max-tokens, #ct-context-range, #ct-user-prompt, #ct-key').on('blur', () => triggerAutoSave(false));
-
     $('#ct-dictionary').on('input', function () {
         settings.dictionary = $(this).val();
         $('#ct-dict-reset').text(settings.dictionary.trim() ? '📬' : '📭');
-    }).on('blur', () => triggerAutoSave(false));
-
+    });
     $('#ct-dict-reset').on('click', async function() {
-        if (!confirm("사전을 비우시겠습니까?")) return;
         $('#ct-dictionary').val(''); settings.dictionary = ''; saveSettingsFn();
-        $(this).text('📭'); catNotify(`${getThemeEmoji()} 📭 우편함 비우기 완료!`, "success");
+        $(this).text('📭');
+        await clearAllCache(); updateCacheStats();
+        catNotify(`${getThemeEmoji()} 📭 우편함(사전) 비우기 + 캐시 초기화 완료!`, "success");
     });
     
-    $('#ct-clear-cache').on('click', async () => { if (confirm("정말 번역 캐시를 전부 삭제하시겠습니까?")) { await clearAllCache(); updateCacheStats(); catNotify(`${getThemeEmoji()} 캐시 전체 삭제 완료! 📂`, "success"); } });
-    $('#ct-reset-settings').on('click', () => { if (confirm("설정을 초기화하시겠습니까?\n(🚨 안심하세요! 사전과 API 키는 유지됩니다)")) { saveSettingsFn(true); catNotify("🔄 설정 초기화 완료!", "success"); setTimeout(() => location.reload(), 500); } });
-
+    $('#ct-user-prompt').on('input', function () { settings.userPrompt = $(this).val(); });
+    $('#ct-context-range').on('change', function () { let val = parseInt($(this).val()) || 0; val = Math.min(6, Math.max(0, val)); $(this).val(val); });
+    $('#cat-save-btn').on('click', () => { saveSettingsFn(); catNotify(`${getThemeEmoji()} 저장 완료! 테마가 동기화되었습니다.`, "success"); });
+    $('#ct-clear-cache').on('click', async () => { await clearAllCache(); updateCacheStats(); catNotify(`${getThemeEmoji()} 캐시 전체 삭제 완료! 📂`, "success"); });
+    $('#ct-reset-settings').on('click', () => {
+        if (!confirm('모든 설정을 초기값으로 되돌리시겠습니까?')) return;
+        $('#ct-profile').val(''); $('#ct-key').val(''); $('#ct-vertex-key').val(''); $('#ct-vertex-project').val('');
+        $('#ct-vertex-region').val('global'); $('#ct-model').val('gemini-2.0-flash'); $('#ct-model-custom').val('').hide();
+        $('#ct-auto-mode').val('none'); $('#ct-lang').val('Korean'); $('#ct-style').val('normal');
+        $('#ct-temperature').val(0.3); $('#ct-max-tokens').val(8192); $('#ct-context-range').val(1);
+        $('#ct-user-prompt').val(''); $('#ct-dictionary').val(''); $('#ct-dict-reset').text('📭');
+        $('#ct-direct-settings').show(); $('#ct-vertex-extra').hide();
+        saveSettingsFn(); catNotify(`${getThemeEmoji()} 설정이 초기화되었습니다!`, "success");
+    });
     $('#ct-export').on('click', () => { saveSettingsFn(); exportSettings(settings); catNotify(`${getThemeEmoji()} 설정 내보내기 완료!`, "success"); });
     $('#ct-import-btn').on('click', () => $('#ct-import-file').click());
     $('#ct-import-file').on('change', async function () { const file = this.files[0]; if (!file) return; try { const imported = await importSettings(file); Object.assign(settings, imported); saveSettingsFn(); catNotify(`${getThemeEmoji()} 설정 가져오기 완료! 새로고침하면 적용됩니다.`, "success"); } catch (e) { catNotify(`${getThemeEmoji()} 오류: ${e.message}`, "error"); } this.value = ''; });
@@ -133,19 +181,24 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
     const initialProfileName = ($('#ct-profile option:selected').text() || '').toLowerCase();
     const initialModel = (settings.directModel || '').toLowerCase();
     const allNames = initialProfileName + ' ' + initialModel;
-    if (allNames.includes('pro') || allNames.includes('프로') || allNames.includes('호랑이') || allNames.includes('tiger')) applyTheme('tiger');
-    else applyTheme('cat');
+    if (allNames.includes('pro') || allNames.includes('프로') || allNames.includes('호랑이') || allNames.includes('tiger')) {
+        applyTheme('tiger');
+    } else {
+        applyTheme('cat');
+    }
 }
 
 export function collectSettings() {
     const modelVal = $('#ct-model').val();
     return {
         profile: $('#ct-profile').val() || '', customKey: $('#ct-key').val() || '',
+        vertexKey: $('#ct-vertex-key').val() || '', vertexProject: $('#ct-vertex-project').val() || '',
+        vertexRegion: $('#ct-vertex-region').val() || 'global',
         directModel: modelVal === 'custom' ? ($('#ct-model-custom').val() || 'gemini-2.0-flash') : (modelVal || 'gemini-1.5-flash'),
         customModelName: $('#ct-model-custom').val() || '', autoMode: $('#ct-auto-mode').val() || 'none',
         targetLang: $('#ct-lang').val() || 'Korean', style: $('#ct-style').val() || 'normal',
         temperature: parseFloat($('#ct-temperature').val()) || 0.3, maxTokens: parseInt($('#ct-max-tokens').val()) || 8192,
-        contextRange: Math.min(4, Math.max(0, parseInt($('#ct-context-range').val()) || 1)),
+        contextRange: Math.min(6, Math.max(0, parseInt($('#ct-context-range').val()) || 1)),
         userPrompt: $('#ct-user-prompt').val() || '', dictionary: $('#ct-dictionary').val() || ''
     };
 }
@@ -166,18 +219,13 @@ export function applyTheme(theme, notify = false) {
 }
 
 export function injectInputButtons(settings, stContext, processMessageFn) {
-    if ($('#cat-input-btn-group').length > 0) { const icon = $('#cat-input-btn .cat-emoji-icon'); if (isTranslatingInput) icon.addClass('cat-glow-anim'); else icon.removeClass('cat-glow-anim'); return; }
+    if ($('#cat-input-btn').length > 0) { const icon = $('#cat-input-btn .cat-emoji-icon'); if (isTranslatingInput) icon.addClass('cat-glow-anim'); else icon.removeClass('cat-glow-anim'); return; }
     const target = $('#send_but'); if (target.length === 0) return;
-    
-    // 🚨 디자인 튜닝: 그룹으로 묶되 style.css에서 겹침 방지 처리됨
-    const group = $('<div id="cat-input-btn-group" class="cat-input-btn-group"></div>');
     const emoji = getThemeEmoji();
     const transBtn = $(`<div id="cat-input-btn" title="번역" class="cat-input-icon interactable"><span class="cat-emoji-icon">${emoji}</span></div>`);
     const revertBtn = $(`<div id="cat-input-revert" title="되돌리기" class="cat-input-icon interactable"><i class="fa-solid fa-rotate-left"></i></div>`);
     const bulkBtn = $(`<div id="cat-bulk-btn" title="전체 번역" class="cat-input-icon interactable"><span class="cat-emoji-icon">⚡</span></div>`);
-    
-    group.append(transBtn).append(revertBtn).append(bulkBtn);
-    target.before(group);
+    target.before(transBtn).before(revertBtn).before(bulkBtn);
 
     transBtn.on('click', async (e) => {
         e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
@@ -218,7 +266,6 @@ export function injectMessageButtons(processMessageFn, revertMessageFn) {
     }
 }
 
-// 🚨 디자인 튜닝: 벌크 동물 아이콘 및 팝업 모바일 최적 위치
 function showBulkPopup(event, settings, stContext, processMessageFn) {
     $('.cat-bulk-popup').remove();
     $(document).off('click.catBulkClose touchstart.catBulkClose');
@@ -226,7 +273,7 @@ function showBulkPopup(event, settings, stContext, processMessageFn) {
     const popup = $(`<div class="cat-bulk-popup">
         <div class="cat-bulk-option" data-count="all">📋 전체 번역</div>
         <div class="cat-bulk-option" data-count="20">🦁 최근 20개</div>
-        <div class="cat-bulk-option" data-count="15">🐯 최근 15개</div>
+        <div class="cat-bulk-option" data-count="15">🐱 최근 15개</div>
         <div class="cat-bulk-option" data-count="10">🐱 최근 10개</div>
         <div class="cat-bulk-option" data-count="5">🐭 최근 5개</div>
         <div class="cat-bulk-option" data-count="custom">✏️ 직접 입력...</div>
@@ -237,9 +284,16 @@ function showBulkPopup(event, settings, stContext, processMessageFn) {
     
     $('body').append(popup);
     const rect = btn.getBoundingClientRect();
-    const topPos = rect.top > 300 ? (rect.top - 240) : (rect.bottom + 10);
-    popup.css({ position: 'fixed', top: topPos + 'px', left: Math.max(10, rect.left - 40) + 'px', zIndex: 2147483647 });
     
+    // 번개 아이콘 바로 위에 절대 좌표로 고정
+    popup.css({ 
+        position: 'fixed', 
+        top: (rect.top - popup.outerHeight() - 10) + 'px', 
+        left: Math.max(10, rect.left - 40) + 'px', 
+        zIndex: 2147483647 
+    });
+    
+    // 터치 중복 방지 (무적 시간)
     let _bulkJustOpened = true;
     setTimeout(() => { _bulkJustOpened = false; }, 300);
     
@@ -247,17 +301,18 @@ function showBulkPopup(event, settings, stContext, processMessageFn) {
     
     popup.find('.cat-bulk-option').on('click touchend', async function (e) {
         e.preventDefault(); e.stopPropagation();
-        const countData = $(this).data('count');
+        let count = $(this).data('count');
+        if (count === 'custom') {
+            popup.remove();
+            $(document).off('click.catBulkClose touchstart.catBulkClose');
+            const input = prompt('번역할 최근 메시지 수를 입력하세요:', '10');
+            if (!input || isNaN(parseInt(input))) return;
+            count = parseInt(input);
+            if (count <= 0) return;
+        }
         popup.remove();
         $(document).off('click.catBulkClose touchstart.catBulkClose');
-        
-        let finalCount = countData;
-        if (countData === 'custom') {
-            const userInput = prompt("몇 개의 메시지를 번역할까요?", "5");
-            if (!userInput || isNaN(userInput)) return;
-            finalCount = parseInt(userInput);
-        }
-        await executeBulkTranslation(finalCount, settings, stContext, processMessageFn);
+        await executeBulkTranslation(count, settings, stContext, processMessageFn);
     });
     
     setTimeout(() => {
@@ -275,9 +330,7 @@ async function executeBulkTranslation(count, settings, stContext, processMessage
     const allMes = $('.mes'); let targets = []; let originalCount = 0;
     if (count === 'all') { allMes.each(function () { targets.push($(this)); }); } else { const num = parseInt(count); const start = Math.max(0, allMes.length - num); allMes.slice(start).each(function () { targets.push($(this)); }); }
     originalCount = targets.length;
-    
-    // 🚨 무한 루프 방지: data-cat-translated 확인
-    targets = targets.filter(el => { const msgId = parseInt(el.attr('mesid'), 10); const msg = stContext.chat[msgId]; return msg && !msg.extra?.display_text && el.attr('data-cat-translated') !== 'true'; });
+    targets = targets.filter(el => { const msgId = parseInt(el.attr('mesid'), 10); const msg = stContext.chat[msgId]; return msg && !msg.extra?.display_text; });
     const skipped = originalCount - targets.length;
     if (targets.length === 0) { catNotify(`${getThemeEmoji()} 번역할 메시지가 없습니다. (${skipped}개 이미 번역됨)`, "warning"); return; }
 
@@ -301,7 +354,6 @@ async function executeBulkTranslation(count, settings, stContext, processMessage
     bulkAbortController = null;
 }
 
-// 🚨 마스터 원본 유지: 히스토리 팝업 기능 완전 보존
 export async function showHistoryPopup(originalText, targetLang, anchorEl, onSelect, modelKey = 'default') {
     $('.cat-history-popup').remove();
     const history = await getHistory(originalText, targetLang, modelKey);
@@ -357,7 +409,6 @@ export async function showHistoryPopup(originalText, targetLang, anchorEl, onSel
     return true;
 }
 
-// 🚨 마스터 원본 유지: 드래그 사전 등록 기능 완전 보존
 export function setupDragDictionary(settings, saveSettingsFn) {
     let pawIcon = null; let _dragDebounce = null;
     const handleSelection = () => {
@@ -411,3 +462,4 @@ export function setupMutationObserver(processMessageFn, revertMessageFn, setting
     observer.observe(chatContainer, { childList: true, subtree: true });
     injectMessageButtons(processMessageFn, revertMessageFn); injectInputButtons(settings, stContext, processMessageFn); setInterval(() => injectInputButtons(settings, stContext, processMessageFn), 2000);
 }
+
