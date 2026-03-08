@@ -64,8 +64,8 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
                 </label>
                 <textarea id="ct-dictionary" class="text_pole" rows="3" placeholder="Ghost=고스트&#10;Soap=소프">${settings.dictionary || ''}</textarea>
             </div>
-            <div id="ct-cache-stats" class="cat-stats-bar">캐시 히트율: ${statsData.hitRate}% | 절약 토큰: ~${statsData.tokensSaved.toLocaleString()}</div>
-            <button id="ct-clear-cache" class="menu_button cat-btn-secondary" style="margin-top:4px; width:100%;">🗑️ 캐시 전체 삭제</button>
+            <div id="ct-cache-stats" class="cat-stats-bar"><span id="ct-cache-icon" style="font-size:1.3em;">🗂️</span> 캐시 히트율: ${statsData.hitRate}% | 절약 토큰: ~${statsData.tokensSaved.toLocaleString()}</div>
+            <button id="ct-clear-cache" class="menu_button cat-btn-secondary" style="margin-top:4px; width:100%; font-size:1em;">🗑️ 캐시 전체 삭제</button>
             <div style="display:flex; gap:8px; margin-top:8px;">
                 <button id="ct-export" class="menu_button cat-btn-secondary" style="flex:1;">📤 내보내기</button><button id="ct-import-btn" class="menu_button cat-btn-secondary" style="flex:1;">📥 가져오기</button>
                 <input type="file" id="ct-import-file" accept=".json" style="display:none;">
@@ -116,11 +116,19 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
     $('#ct-user-prompt').on('input', function () { settings.userPrompt = $(this).val(); });
     $('#ct-context-range').on('change', function () { let val = parseInt($(this).val()) || 0; val = Math.min(3, Math.max(0, val)); $(this).val(val); });
     $('#cat-save-btn').on('click', () => { saveSettingsFn(); catNotify(`${getThemeEmoji()} 저장 완료! 테마가 동기화되었습니다.`, "success"); });
-    $('#ct-clear-cache').on('click', async () => { await clearAllCache(); updateCacheStats(); catNotify(`${getThemeEmoji()} 캐시 전체 삭제 완료!`, "success"); });
+    $('#ct-clear-cache').on('click', async () => { await clearAllCache(); updateCacheStats(); catNotify(`${getThemeEmoji()} 캐시 전체 삭제 완료! 📂`, "success"); });
     $('#ct-export').on('click', () => { saveSettingsFn(); exportSettings(settings); catNotify(`${getThemeEmoji()} 설정 내보내기 완료!`, "success"); });
     $('#ct-import-btn').on('click', () => $('#ct-import-file').click());
     $('#ct-import-file').on('change', async function () { const file = this.files[0]; if (!file) return; try { const imported = await importSettings(file); Object.assign(settings, imported); saveSettingsFn(); catNotify(`${getThemeEmoji()} 설정 가져오기 완료! 새로고침하면 적용됩니다.`, "success"); } catch (e) { catNotify(`${getThemeEmoji()} 오류: ${e.message}`, "error"); } this.value = ''; });
-    applyTheme(getModelTheme(settings.directModel));
+    // 초기 테마 적용: 프리셋 이름 또는 모델명에서 감지
+    const initialProfileName = ($('#ct-profile option:selected').text() || '').toLowerCase();
+    const initialModel = (settings.directModel || '').toLowerCase();
+    const allNames = initialProfileName + ' ' + initialModel;
+    if (allNames.includes('pro') || allNames.includes('프로') || allNames.includes('호랑이') || allNames.includes('tiger')) {
+        applyTheme('tiger');
+    } else {
+        applyTheme('cat');
+    }
 }
 
 export function collectSettings() {
@@ -135,7 +143,12 @@ export function collectSettings() {
         userPrompt: $('#ct-user-prompt').val() || '', dictionary: $('#ct-dictionary').val() || ''
     };
 }
-export function updateCacheStats() { const s = getStats(); $('#ct-cache-stats').text(`캐시 히트율: ${s.hitRate}% | 절약 토큰: ~${s.tokensSaved.toLocaleString()}`); }
+export function updateCacheStats() {
+    const s = getStats();
+    const icon = s.hits > 0 ? '🗂️' : '📂';
+    $('#ct-cache-icon').text(icon);
+    $('#ct-cache-stats').html(`<span id="ct-cache-icon" style="font-size:1.3em;">${icon}</span> 캐시 히트율: ${s.hitRate}% | 절약 토큰: ~${s.tokensSaved.toLocaleString()}`);
+}
 let _lastAppliedTheme = null;
 export function applyTheme(theme) {
     document.body.setAttribute('data-cat-theme', theme); const emoji = theme === 'tiger' ? '🐯' : '🐱';
@@ -195,26 +208,51 @@ export function injectMessageButtons(processMessageFn, revertMessageFn) {
 }
 
 function showBulkPopup(event, settings, stContext, processMessageFn) {
+    // 기존 팝업 제거
     $('.cat-bulk-popup').remove();
-    const popup = $(`<div class="cat-bulk-popup"><div class="cat-bulk-option" data-count="all">전체</div><div class="cat-bulk-option" data-count="10">최근 10</div><div class="cat-bulk-option" data-count="30">최근 30</div><div class="cat-bulk-option" data-count="50">최근 50</div></div>`);
+    $(document).off('click.catBulkClose');
     
-    // ⚡ 버튼 위치 기준으로 팝업 배치
-    const btn = $('#cat-bulk-btn')[0];
-    if (btn) {
-        const rect = btn.getBoundingClientRect();
-        popup.css({ position: 'fixed', bottom: (window.innerHeight - rect.top + 4) + 'px', left: rect.left + 'px', zIndex: 2147483647 });
+    const popup = $(`<div class="cat-bulk-popup">
+        <div class="cat-bulk-option" data-count="all">📋 전체</div>
+        <div class="cat-bulk-option" data-count="10">🔟 최근 10</div>
+        <div class="cat-bulk-option" data-count="30">📑 최근 30</div>
+        <div class="cat-bulk-option" data-count="50">📚 최근 50</div>
+    </div>`);
+    
+    // ⚡ 버튼 바로 위에 팝업 배치
+    const btn = document.getElementById('cat-bulk-btn');
+    if (!btn) return;
+    const rect = btn.getBoundingClientRect();
+    const popupHeight = 180; // 대략적 팝업 높이
+    
+    // 위에 공간 없으면 아래로
+    const spaceAbove = rect.top;
+    if (spaceAbove > popupHeight) {
+        popup.css({ position: 'fixed', bottom: (window.innerHeight - rect.top + 8) + 'px', left: Math.max(4, rect.left - 40) + 'px', zIndex: 2147483647 });
+    } else {
+        popup.css({ position: 'fixed', top: (rect.bottom + 8) + 'px', left: Math.max(4, rect.left - 40) + 'px', zIndex: 2147483647 });
     }
+    
     $('body').append(popup);
-    popup.find('.cat-bulk-option').on('click', async function (e) { e.stopPropagation(); const count = $(this).data('count'); popup.remove(); await executeBulkTranslation(count, settings, stContext, processMessageFn); });
-    // 모바일에서 터치 이벤트가 팝업을 즉시 닫는 것 방지 (300ms 대기)
+    
+    // 옵션 클릭
+    popup.find('.cat-bulk-option').on('click', async function (e) {
+        e.preventDefault(); e.stopPropagation();
+        const count = $(this).data('count');
+        popup.remove();
+        $(document).off('click.catBulkClose');
+        await executeBulkTranslation(count, settings, stContext, processMessageFn);
+    });
+    
+    // 외부 클릭 닫기 (500ms 후 등록 — 모바일 터치 이벤트 소화 대기)
     setTimeout(() => {
-        $(document).on('click.catBulkClose', (e) => {
-            if (!$(e.target).closest('.cat-bulk-popup').length) {
+        $(document).on('click.catBulkClose touchstart.catBulkClose', (e) => {
+            if (!$(e.target).closest('.cat-bulk-popup, #cat-bulk-btn').length) {
                 popup.remove();
-                $(document).off('click.catBulkClose');
+                $(document).off('click.catBulkClose touchstart.catBulkClose');
             }
         });
-    }, 300);
+    }, 500);
 }
 
 async function executeBulkTranslation(count, settings, stContext, processMessageFn) {
@@ -252,13 +290,32 @@ export async function showHistoryPopup(originalText, targetLang, anchorEl, onSel
 
     const sorted = [...history].sort((a, b) => { if (a.pinned && !b.pinned) return -1; if (!a.pinned && b.pinned) return 1; return b.time - a.time; }).slice(0, 5);
     let items = sorted.map((h, i) => {
-        const pinClass = h.pinned ? 'cat-pinned' : ''; const pinIcon = h.pinned ? '📌' : '📍'; const truncated = h.text.length > 50 ? h.text.substring(0, 50) + '...' : h.text;
+        const pinClass = h.pinned ? 'cat-pinned' : ''; const pinIcon = h.pinned ? '📌' : '📍'; const truncated = h.text.length > 80 ? h.text.substring(0, 80) + '...' : h.text;
         return `<div class="cat-history-item ${pinClass}" data-idx="${i}"><span class="cat-history-text" data-text="${encodeURIComponent(h.text)}">${truncated}</span><span class="cat-history-pin" data-text="${encodeURIComponent(h.text)}">${pinIcon}</span></div>`;
     }).join('');
     items += `<div class="cat-history-item cat-history-new">🔄 새로 번역</div>`;
 
-    const popup = $(`<div class="cat-history-popup">${items}</div>`); const rect = anchorEl[0].getBoundingClientRect();
-    popup.css({ position: 'fixed', top: (rect.bottom + 4) + 'px', left: rect.left + 'px', zIndex: 99999 });
+    const popup = $(`<div class="cat-history-popup">${items}</div>`);
+    
+    // 스마트 위치: 화면 밖으로 안 나가게
+    const rect = anchorEl[0].getBoundingClientRect();
+    const popupWidth = 280;
+    let leftPos = rect.left;
+    
+    // 오른쪽으로 넘치면 왼쪽으로 밀기 (페르소나/유저 메시지 대응)
+    if (leftPos + popupWidth > window.innerWidth - 8) {
+        leftPos = window.innerWidth - popupWidth - 8;
+    }
+    leftPos = Math.max(8, leftPos);
+    
+    // 아래 공간 부족하면 위로
+    const spaceBelow = window.innerHeight - rect.bottom;
+    if (spaceBelow > 200) {
+        popup.css({ position: 'fixed', top: (rect.bottom + 4) + 'px', left: leftPos + 'px', zIndex: 2147483647 });
+    } else {
+        popup.css({ position: 'fixed', bottom: (window.innerHeight - rect.top + 4) + 'px', left: leftPos + 'px', zIndex: 2147483647 });
+    }
+    
     $('body').append(popup);
 
     popup.find('.cat-history-text').on('click', function () { const text = decodeURIComponent($(this).data('text')); onSelect(text, false); popup.remove(); });
@@ -274,7 +331,14 @@ export async function showHistoryPopup(originalText, targetLang, anchorEl, onSel
         popup.remove();
     });
 
-    setTimeout(() => { $(document).one('click', () => popup.remove()); }, 50);
+    setTimeout(() => {
+        $(document).on('click.catHistoryClose touchstart.catHistoryClose', (e) => {
+            if (!$(e.target).closest('.cat-history-popup').length) {
+                popup.remove();
+                $(document).off('click.catHistoryClose touchstart.catHistoryClose');
+            }
+        });
+    }, 500);
     return true;
 }
 

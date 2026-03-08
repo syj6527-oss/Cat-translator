@@ -20,12 +20,12 @@
 #cat-drawer-header .inline-drawer-title { display: flex; align-items: center; gap: 8px; flex: 1; font-size: 1.05em; font-weight: 600; color: var(--SmartThemeBodyColor, #000); }
 #cat-drawer-toggle { transition: transform 0.2s ease-in-out; opacity: 0.7; }
 .cat-setting-row { margin-bottom: 8px; }
-.cat-setting-row > label { display: block; font-size: 0.85em; font-weight: 600; margin-bottom: 3px; color: var(--SmartThemeBodyColor, #000); }
+.cat-setting-row > label { display: block; font-size: 0.95em; font-weight: 600; margin-bottom: 3px; color: var(--SmartThemeBodyColor, #000); }
 .cat-readonly-area { background: var(--SmartThemeBlurTintColor, rgba(128,128,128,0.1)) !important; opacity: 0.7; font-size: 0.8em; cursor: not-allowed; }
-.cat-stats-bar { font-size: 0.8em; padding: 6px 10px; border-radius: 6px; background: var(--ca-bg); border: 1px solid var(--ca-border); text-align: center; color: var(--SmartThemeBodyColor, #000); margin-top: 8px; }
+.cat-stats-bar { font-size: 0.9em; padding: 8px 12px; border-radius: 6px; background: var(--ca-bg); border: 1px solid var(--ca-border); text-align: center; color: var(--SmartThemeBodyColor, #000); margin-top: 8px; }
 .cat-save-button { background: var(--ca-bg) !important; border: 1px solid var(--ca-accent) !important; color: var(--SmartThemeBodyColor, #000) !important; font-weight: bold; border-radius: 8px; padding: 10px; }
 .cat-save-button:hover { background: var(--ca-border) !important; }
-.cat-btn-secondary { font-size: 0.85em; padding: 6px 10px; border-radius: 6px; }
+.cat-btn-secondary { font-size: 0.95em; padding: 8px 12px; border-radius: 6px; }
 
 /* 🚨 마스터 튜닝: 발바닥 정중앙 영구 고정 */
 .cat-paw-toggle { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); cursor: pointer; font-size: 1.1em; z-index: 1; user-select: none; transition: transform 0.2s; }
@@ -71,11 +71,11 @@
 .cat-bulk-option { padding: 10px 18px; cursor: pointer; font-size: 0.9em; color: var(--SmartThemeBodyColor, #fff); transition: background 0.15s; }
 .cat-bulk-option:hover { background: var(--ca-bg); color: var(--ca-accent); }
 
-.cat-history-popup { background: var(--SmartThemeBlurTintColor, #2a2a2a); border: 1px solid var(--ca-border); border-radius: 10px; padding: 6px 0; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3); min-width: 200px; max-width: 350px; max-height: 250px; overflow-y: auto; }
-.cat-history-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; cursor: pointer; font-size: 0.85em; color: var(--SmartThemeBodyColor, #fff); transition: background 0.15s; gap: 8px; }
+.cat-history-popup { background: var(--SmartThemeBlurTintColor, #2a2a2a); border: 1px solid var(--ca-border); border-radius: 10px; padding: 6px 0; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3); width: 280px; max-width: calc(100vw - 16px); max-height: 300px; overflow-y: auto; }
+.cat-history-item { display: flex; align-items: flex-start; justify-content: space-between; padding: 10px 14px; cursor: pointer; font-size: 0.9em; color: var(--SmartThemeBodyColor, #fff); transition: background 0.15s; gap: 8px; }
 .cat-history-item:hover { background: var(--ca-bg); }
 .cat-history-item.cat-pinned { border-left: 3px solid var(--ca-accent); }
-.cat-history-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cat-history-text { flex: 1; overflow: hidden; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.4; }
 .cat-history-pin { cursor: pointer; font-size: 0.9em; flex-shrink: 0; transition: transform 0.2s; }
 .cat-history-pin:hover { transform: scale(1.3); }
 .cat-history-new { border-top: 1px solid var(--ca-border); justify-content: center; font-weight: 600; color: var(--ca-accent); }

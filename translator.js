@@ -10,8 +10,15 @@ YOU ARE A TRANSLATION MACHINE. NOT A CHATBOT. NOT AN ASSISTANT.
 RETURN ONLY THE RAW TRANSLATED TEXT. NOTHING ELSE.
 DO NOT respond. DO NOT converse. DO NOT explain. DO NOT add commentary.
 DO NOT repeat the original. DO NOT add alternatives.
-PRESERVE ALL HTML TAGS and their attributes EXACTLY AS-IS, but TRANSLATE ALL human-readable text inside every tag including <memo>, <small>, <summary>, <font>, code blocks, and HTML comments.
-Translate EVERYTHING that is readable text. Only keep tag names, attributes, and CSS values untouched.
+
+[FORMAT PRESERVATION RULES]
+1. PRESERVE ALL quotation marks exactly (" " ' ' 「」 ( ) etc). If the original has quotes, the translation MUST have the same quotes in the same positions.
+2. PRESERVE ALL HTML tags and attributes exactly (<span>, <div>, <font>, <memo>, <small>, <summary> etc). Translate the text INSIDE tags but never modify the tags themselves.
+3. PRESERVE ALL HTML comments (<!-- -->). Translate the readable text inside comments but keep the comment markers.
+4. PRESERVE ALL markdown formatting (*italic*, **bold**, ~~strike~~, \`code\` etc). Translate the text but keep the formatting symbols.
+5. PRESERVE ALL CSS properties, color codes (#fff, rgb(), etc), and style attributes untouched.
+6. PRESERVE ALL line breaks and paragraph structure exactly as the original.
+7. Translate EVERY piece of human-readable text, including text inside special blocks, metadata sections, and structured data fields.
 If the input is a single word, return only the translated single word.`;
 
 export const STYLE_PRESETS = {
@@ -94,7 +101,7 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
 function assemblePrompt(text, targetLang, isToEnglish, settings, options = {}) {
     const { prevTranslation, contextMessages = [] } = options;
     if (text.length < 50 && !prevTranslation && contextMessages.length === 0 && (!settings.dictionary || !settings.dictionary.trim())) {
-        const lang = isToEnglish ? 'English' : targetLang; return `${text}\n\n(Translate the above to ${lang}. Reply with ONLY the translation.)`;
+        const lang = isToEnglish ? 'English' : targetLang; return `${text}\n\n(Translate the above to ${lang}. Reply with ONLY the translation. Keep all quotation marks exactly.)`;
     }
     let parts = [SYSTEM_SHIELD];
     const preset = STYLE_PRESETS[settings.style] || STYLE_PRESETS.normal; parts.push(`[Style: ${preset.prompt}]`);
