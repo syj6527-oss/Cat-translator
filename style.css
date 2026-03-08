@@ -1,15 +1,16 @@
 /* ============================================================
-   🐱 Cat Translator v18.3.2 - style.css
+   🐱 Cat Translator v18.3.5 - style.css
    ============================================================ */
 [data-cat-theme="cat"] { --ca-accent: #f0a030; --ca-bg: rgba(255, 165, 0, 0.08); --ca-border: rgba(255, 165, 0, 0.3); }
 [data-cat-theme="tiger"] { --ca-accent: #ffd700; --ca-bg: rgba(255, 215, 0, 0.08); --ca-border: rgba(255, 215, 0, 0.3); }
 
+/* 하단 아이콘 겹침 방지 필살기 */
 .cat-input-btn-group {
     display: inline-flex !important;
     align-items: center !important;
     gap: 8px !important;
     margin-right: 8px !important;
-    flex-shrink: 0 !important; /* 🚨 절대 찌그러지지 마라 */
+    flex-shrink: 0 !important; /* 🚨 절대 안 찌그러짐 */
 }
 
 .cat-input-icon { 
@@ -20,6 +21,7 @@
     flex-shrink: 0 !important; 
     justify-content: center;
     align-items: center;
+    background: transparent !important;
 }
 
 .cat-stats-bar { padding: 10px; background: var(--ca-bg); border: 1px solid var(--ca-border); border-radius: 8px; margin: 8px 0; text-align: center; }
