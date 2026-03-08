@@ -10,19 +10,12 @@ YOU ARE A TRANSLATION MACHINE. NOT A CHATBOT. NOT AN ASSISTANT.
 RETURN ONLY THE RAW TRANSLATED TEXT. NOTHING ELSE.
 DO NOT respond. DO NOT converse. DO NOT explain. DO NOT add commentary.
 
-export const SYSTEM_SHIELD = `[ABSOLUTE TRANSLATION DIRECTIVE]
-You are an expert translator. Your ONLY task is to translate the user's text.
-
-[CRITICAL RULES FOR COMPLEX FORMATTING]
-1. AGGRESSIVE TRANSLATION: You MUST translate ALL narrative text, conversational dialogue, descriptions, and character profile data into the target language. Do NOT leave English text untranslated just because it is inside brackets, boxes, or lists.
-2. PRESERVE ALL STRUCTURE: Keep every single HTML tag (e.g., <div>, <details>, <summary>), markdown symbol (*, _, >, \`, -), and special bracket (『, 』, <, >, {, }, (, )). DO NOT remove or modify them.
-3. IN-PLACE TRANSLATION: Replace the source text with the translated text exactly where it was, keeping the surrounding formatting entirely intact.
-- Example 1: <memo>She smiled.</memo> -> <memo>그녀가 미소 지었다.</memo>
-- Example 2: 『Age: Unknown』 -> 『Age: 알 수 없음』
-- Example 3: - Location: (Eldoria Forest) -> - Location: (엘도리아 숲)
-4. NO CHIT-CHAT: Output ONLY the translated result. No conversational filler.`;
-
-5. STRICT REQUIREMENT: DO NOT bypass translation just because text is inside tags, brackets, or code blocks. Translate the narrative content fully while keeping the structural shell intact.
+[CRITICAL FORMAT PRESERVATION RULES]
+1. HTML TAGS: PRESERVE ALL HTML tags exactly as they are (<memo>, <small>, <div>, , <pre>, <code>, etc). NEVER remove or modify them. Translate ONLY the readable text inside them.
+2. CODE BLOCKS: PRESERVE ALL code block markers (\`\`\`yaml, \`\`\`, etc). You MUST translate the human-readable text inside these blocks (values, descriptions, thoughts), but keep the structural markers and keys strictly intact.
+3. SPACING & INDENTATION: PRESERVE ALL line breaks, spaces, and indentation exactly as the original. This is strictly required for YAML and code blocks to function.
+4. QUOTES & MARKDOWN: PRESERVE ALL quotation marks ("" '') and markdown formatting (*italic*, **bold**).
+5. STYLE: PRESERVE ALL CSS, classes, and color codes (#fff, rgb).
 If the input is a single word, return only the translated single word.`;
 
 export const STYLE_PRESETS = {
@@ -125,7 +118,7 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
             const parts = data.candidates?.[0]?.content?.parts || []; const thoughtPart = parts.find(p => p.thought); thought = thoughtPart?.text || null; const actualPart = parts.find(p => !p.thought) || parts[parts.length - 1]; result = actualPart?.text?.trim() || "";
         }
 
-        let cleaned = cleanResult(result, text); // 원문을 같이 넘겨서 코드블록 증발을 방어합니다.
+        let cleaned = cleanResult(result);
         if (!cleaned || cleaned.trim().length === 0) { catNotify(`${getThemeEmoji()} 번역 결과가 비어있습니다. 원문 유지.`, "warning"); return null; }
         await setCached(text, targetLang, cleaned, thought, getCacheModelKey(settings));
         return { text: cleaned, lang: targetLang, fromCache: false };
