@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Cat Translator v18.4.0 - utils.js (레이아웃 보존형)
+// 🐱 Cat Translator v18.4.2 - utils.js
 // ============================================================
 
 export function getThemeEmoji() {
@@ -14,7 +14,6 @@ export function getCompletionEmoji() {
 
 export function catNotify(message, type = 'success') {
     $('.cat-notification').remove();
-    const emoji = getThemeEmoji();
     const colors = { success: '#2ecc71', warning: '#f39c12', error: '#e74c3c', progress: '#f39c12' };
     const notifyHtml = $(`<div class="cat-notification cat-native-font" style="background-color: ${colors[type] || colors.success};">${message}</div>`);
     $('body').append(notifyHtml);
@@ -22,13 +21,13 @@ export function catNotify(message, type = 'success') {
     setTimeout(() => { notifyHtml.removeClass('show'); setTimeout(() => notifyHtml.remove(), 500); }, 2500);
 }
 
+// 🚨 코드박스 및 상태창 보존 필살기
 export function cleanResult(text) {
     if (!text) return "";
     let cleaned = text.replace(/^(번역|Translation|Output|Input|Result):\s*/gi, "");
-    const wholeCodeBlockMatch = cleaned.match(/^```[a-z]*\n([\s\S]*?)\n```$/i);
-    if (wholeCodeBlockMatch) cleaned = wholeCodeBlockMatch[1];
     
-    // 🚨 절대 주의: 공백/줄바꿈을 임의로 제거하지 않아 상태창 레이아웃을 보존합니다.
+    // 🚨 절대 주의: 코드블록(```)을 삭제하는 정규식을 완전히 제거함!
+    // 줄바꿈과 들여쓰기를 최대한 유지하여 상태창 레이아웃을 보호합니다.
     return cleaned.trim();
 }
 
@@ -55,4 +54,3 @@ export function setTextareaValue(el, value) {
     if (ns) ns.call(el, value); else el.value = value;
     el.dispatchEvent(new Event('input', { bubbles: true }));
 }
-
