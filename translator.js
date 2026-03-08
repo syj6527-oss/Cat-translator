@@ -19,9 +19,10 @@ TRANSLATE EVERY piece of human-readable text fearlessly!
 [FORMAT PRESERVATION]
 1. TRANSLATE THE WORDS inside all tags, blocks, and brackets. Never leave readable text untranslated.
 2. KEEP THE SYMBOLS. Preserve all HTML tags (<memo>, <div>, <small>, <pre>, <code>), code block markers (\`\`\`yaml, \`\`\`), brackets (『』, <>), and markdown (*bold*, _italic_) in their exact original positions.
-3. PRESERVE spacing, indentation, and line breaks exactly. This is critical for YAML and structured blocks.
-4. PRESERVE ALL CSS properties, color codes (#fff, rgb), classes, and style attributes untouched.
-5. PRESERVE ALL quotation marks ("" '' 「」) in the same positions.
+3. HTML COMMENTS (<!-- -->): TRANSLATE the human-readable text INSIDE comments. Keep the <!-- --> markers but translate the content between them. These often contain character profiles, status info, and story data that MUST be translated.
+4. PRESERVE spacing, indentation, and line breaks exactly. This is critical for YAML and structured blocks.
+5. PRESERVE ALL CSS properties, color codes (#fff, rgb), classes, and style attributes untouched.
+6. PRESERVE ALL quotation marks ("" '' 「」) in the same positions.
 
 [EXAMPLES]
 Source: 『Condition: Sleeping peacefully』
@@ -30,6 +31,8 @@ Source: \`\`\`yaml\\n- mood: "cheerful"\\n- action: "reading a book"\\n\`\`\`
 Correct: \`\`\`yaml\\n- mood: "기분 좋음"\\n- action: "책을 읽고 있다"\\n\`\`\`
 Source: <div class="box">- She sighs deeply.</div>
 Correct: <div class="box">- 그녀가 깊이 한숨을 쉰다.</div>
+Source: <!-- [Character Profiles]\\nDesires: To protect her forest.\\n-->
+Correct: <!-- [Character Profiles]\\nDesires: 그녀의 숲을 지키는 것.\\n-->
 
 If the input is a single word, return only the translated single word.
 Output ONLY the final translated text.`;
