@@ -78,24 +78,24 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
 
     $('#cat-drawer-header').on('click', (e) => { e.stopPropagation(); $('#cat-drawer-content').slideToggle(200); $('#cat-drawer-toggle').toggleClass('fa-chevron-down fa-chevron-up'); });
     $('#ct-key-toggle').on('click', () => { const i = $('#ct-key'); i.attr('type', i.attr('type') === 'password' ? 'text' : 'password'); });
-    $('#ct-model').val(settings.directModel).on('change', function () { const val = $(this).val(); $('#ct-model-custom').toggle(val === 'custom'); if (val !== 'custom') applyTheme(getModelTheme(val)); });
-    $('#ct-model-custom').val(settings.customModelName || '').on('input', function () { applyTheme(getModelTheme($(this).val())); });
+    $('#ct-model').val(settings.directModel).on('change', function () { const val = $(this).val(); $('#ct-model-custom').toggle(val === 'custom'); if (val !== 'custom') applyTheme(getModelTheme(val), true); });
+    $('#ct-model-custom').val(settings.customModelName || '').on('input', function () { applyTheme(getModelTheme($(this).val()), true); });
     $('#ct-profile').val(settings.profile).on('change', function () {
         settings.profile = $(this).val();
         $('#ct-direct-settings').toggle(settings.profile === '');
         const pn = $(this).find('option:selected').text().toLowerCase();
         // 프리셋 이름에서 pro/프로/tiger/호랑이 감지 → 🐯
         if (pn.includes('pro') || pn.includes('프로') || pn.includes('tiger') || pn.includes('호랑이')) {
-            applyTheme('tiger');
+            applyTheme('tiger', true);
         // flash/플래/cat/고양이 감지 → 🐱
         } else if (pn.includes('flash') || pn.includes('플래') || pn.includes('플레') || pn.includes('cat') || pn.includes('고양이')) {
-            applyTheme('cat');
+            applyTheme('cat', true);
         // 직접 연결이면 모델명 기준
         } else if (settings.profile === '') {
-            applyTheme(getModelTheme(settings.directModel));
+            applyTheme(getModelTheme(settings.directModel), true);
         // 아무것도 못 찾으면 기본 🐱
         } else {
-            applyTheme('cat');
+            applyTheme('cat', true);
         }
     });
     $('#ct-style').val(settings.style || 'normal').on('change', function () { const preset = STYLE_PRESETS[$(this).val()]; if (preset) $('#ct-temperature').val(preset.temperature); });
@@ -150,10 +150,10 @@ export function updateCacheStats() {
     $('#ct-cache-stats').html(`<span id="ct-cache-icon" style="font-size:1.3em;">${icon}</span> 캐시 히트율: ${s.hitRate}% | 절약 토큰: ~${s.tokensSaved.toLocaleString()}`);
 }
 let _lastAppliedTheme = null;
-export function applyTheme(theme) {
+export function applyTheme(theme, notify = false) {
     document.body.setAttribute('data-cat-theme', theme); const emoji = theme === 'tiger' ? '🐯' : '🐱';
     $('.cat-theme-emoji').text(emoji); $('.cat-mes-trans-btn .cat-emoji-icon').text(emoji); $('#cat-input-btn .cat-emoji-icon').text(emoji);
-    if (_lastAppliedTheme !== null && _lastAppliedTheme !== theme) {
+    if (notify) {
         if (theme === 'tiger') catNotify('🐯 어흥! 호랑이 모드 활성화!', 'success'); else catNotify('🐱 야옹~ 고양이 모드 활성화!', 'success');
     }
     _lastAppliedTheme = theme;
@@ -210,7 +210,7 @@ export function injectMessageButtons(processMessageFn, revertMessageFn) {
 function showBulkPopup(event, settings, stContext, processMessageFn) {
     // 기존 팝업 제거
     $('.cat-bulk-popup').remove();
-    $(document).off('click.catBulkClose');
+    $(document).off('click.catBulkClose touchstart.catBulkClose');
     
     const popup = $(`<div class="cat-bulk-popup">
         <div class="cat-bulk-option" data-count="all">📋 전체</div>
@@ -235,18 +235,26 @@ function showBulkPopup(event, settings, stContext, processMessageFn) {
     
     $('body').append(popup);
     
+    // 🚨 즉시 닫힘 방지 플래그
+    let _bulkJustOpened = true;
+    setTimeout(() => { _bulkJustOpened = false; }, 300);
+    
+    // 팝업 자체에서 이벤트 전파 차단 (모바일 터치 대응)
+    popup.on('touchstart click', (e) => { e.stopPropagation(); });
+    
     // 옵션 클릭
-    popup.find('.cat-bulk-option').on('click', async function (e) {
+    popup.find('.cat-bulk-option').on('click touchend', async function (e) {
         e.preventDefault(); e.stopPropagation();
         const count = $(this).data('count');
         popup.remove();
-        $(document).off('click.catBulkClose');
+        $(document).off('click.catBulkClose touchstart.catBulkClose');
         await executeBulkTranslation(count, settings, stContext, processMessageFn);
     });
     
     // 외부 클릭 닫기 (500ms 후 등록 — 모바일 터치 이벤트 소화 대기)
     setTimeout(() => {
         $(document).on('click.catBulkClose touchstart.catBulkClose', (e) => {
+            if (_bulkJustOpened) return;
             if (!$(e.target).closest('.cat-bulk-popup, #cat-bulk-btn').length) {
                 popup.remove();
                 $(document).off('click.catBulkClose touchstart.catBulkClose');

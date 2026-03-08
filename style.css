@@ -56,7 +56,7 @@
 .cat-mes-revert-btn { font-size: 1em; color: var(--ca-accent); }
 
 /* 🚨 마스터 튜닝: 하단 버튼 뒤로 글씨 안 비치게 강력한 가림막 캡슐 씌움 */
-.cat-input-icon { cursor: pointer; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0 !important; margin: 0 2px !important; flex-shrink: 0; border: none !important; outline: none !important; box-shadow: none !important; -webkit-tap-highlight-color: transparent; box-sizing: border-box; background: transparent !important; }
+.cat-input-icon { cursor: pointer; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0 !important; margin: 0 0px !important; flex-shrink: 0; border: none !important; outline: none !important; box-shadow: none !important; -webkit-tap-highlight-color: transparent; box-sizing: border-box; background: transparent !important; }
 .cat-input-icon:active { opacity: 0.6; }
 .cat-input-icon i { color: var(--ca-accent); font-size: 0.9em; }
 .cat-input-icon .cat-emoji-icon { font-size: 1.2em; pointer-events: none; }
@@ -80,8 +80,8 @@
 .cat-history-pin:hover { transform: scale(1.3); }
 .cat-history-new { border-top: 1px solid var(--ca-border); justify-content: center; font-weight: 600; color: var(--ca-accent); }
 
-.cat-drag-paw { cursor: pointer; font-size: 1.4em; animation: cat-paw-bounce 0.5s ease; user-select: none; filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.3)); transition: transform 0.2s; }
-.cat-drag-paw:hover { transform: scale(1.3); }
+.cat-drag-paw { cursor: pointer; font-size: 2.2em; animation: cat-paw-bounce 0.5s ease; user-select: none; filter: drop-shadow(0 2px 8px rgba(255, 105, 180, 0.6)); transition: transform 0.2s; }
+.cat-drag-paw:hover { transform: scale(1.3); filter: drop-shadow(0 2px 12px rgba(255, 105, 180, 0.9)); }
 @keyframes cat-paw-bounce { 0% { opacity: 0; transform: translateY(-10px) scale(0.5); } 70% { transform: translateY(3px) scale(1.1); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
 .cat-drag-popup { background: var(--SmartThemeBlurTintColor, #2a2a2a); border: 1px solid var(--ca-border); border-radius: 10px; padding: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3); min-width: 220px; }
 .cat-drag-header { font-size: 0.85em; font-weight: 600; margin-bottom: 8px; color: var(--SmartThemeBodyColor, #fff); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -94,7 +94,7 @@
     .cat-notification { font-size: 12px; padding: 8px 16px; max-width: 90vw; }
     .cat-bulk-popup, .cat-history-popup, .cat-drag-popup { max-width: calc(100vw - 32px); }
     #cat-drawer-content [style*="display:flex"] { flex-wrap: nowrap !important; }
-    .cat-input-icon { width: 24px; height: 24px; margin: 0 1px !important; }
+    .cat-input-icon { width: 24px; height: 24px; margin: 0 0px !important; }
     .cat-input-icon .cat-emoji-icon { font-size: 1em; }
     #send_but { margin-left: 4px !important; }
 }

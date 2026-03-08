@@ -51,26 +51,13 @@ export function catNotifyProgress(message, onAbort) {
     return el;
 }
 
-// 🚨 마스터 요청: 엔터(줄바꿈) 증발 방지 및 HTML/마크다운 완전 복구!
+// 🚨 마스터 요청: 엔터(줄바꿈) 증발하는 악질 버그 수리 완료!
 export function cleanResult(text) {
     if (!text) return "";
-    
-    let cleaned = text.replace(/^(번역|Translation|Output|Input|Result):\s*/gi, "");
-    
-    // AI가 답변 전체를 코드블록(```)으로 감싸서 보내는 경우 겉 껍데기만 제거
-    const wholeCodeBlockMatch = cleaned.match(/^```[a-z]*\n([\s\S]*?)\n```$/i);
-    if (wholeCodeBlockMatch) {
-        cleaned = wholeCodeBlockMatch[1];
-    }
-
-    // 🚨 핵심 수정 부분: AI가 제멋대로 바꾼(&lt; &gt; \) 특수기호 강제 원상복구
-    cleaned = cleaned.replace(/&lt;/g, "<")
-                     .replace(/&gt;/g, ">")
-                     .replace(/\\`/g, "`")
-                     .replace(/\\</g, "<")
-                     .replace(/\\>/g, ">");
-
-    return cleaned
+    return text
+        .replace(/^(번역|Translation|Output|Input|Result):\s*/gi, "")
+        .replace(/```[\s\S]*?```/g, "")
+        .replace(/`([^`]+)`/g, "$1")
         .replace(/[^\S\r\n]{2,}/g, " ") // 스페이스랑 탭만 줄이고 줄바꿈(\r\n)은 절대 안 건드림!
         .trim();
 }
@@ -78,8 +65,8 @@ export function cleanResult(text) {
 export function getModelTheme(modelName) {
     if (!modelName) return 'cat';
     const lower = modelName.toLowerCase();
-    if (lower.includes('pro') || lower.includes('프로')) return 'tiger';
-    if (lower.includes('flash') || lower.includes('플래') || lower.includes('플레')) return 'cat';
+    if (lower.includes('pro') || lower.includes('프로') || lower.includes('호랑이') || lower.includes('tiger')) return 'tiger';
+    if (lower.includes('flash') || lower.includes('플래') || lower.includes('플레') || lower.includes('고양이') || lower.includes('cat')) return 'cat';
     return 'cat';
 }
 
@@ -154,4 +141,3 @@ export function setTextareaValue(el, value) {
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
 }
-
