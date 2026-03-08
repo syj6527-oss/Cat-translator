@@ -51,13 +51,20 @@ export function catNotifyProgress(message, onAbort) {
     return el;
 }
 
-// 🚨 마스터 요청: 엔터(줄바꿈) 증발하는 악질 버그 수리 완료!
+// 🚨 마스터 요청: 엔터(줄바꿈) 증발 및 코드블록 날아가는 악질 버그 수리 완료!
 export function cleanResult(text) {
     if (!text) return "";
-    return text
-        .replace(/^(번역|Translation|Output|Input|Result):\s*/gi, "")
-        .replace(/```[\s\S]*?```/g, "")
-        .replace(/`([^`]+)`/g, "$1")
+    
+    let cleaned = text.replace(/^(번역|Translation|Output|Input|Result):\s*/gi, "");
+    
+    // AI가 답변 전체를 코드블록(```)으로 감싸서 보내는 경우에만 겉 껍데기 제거
+    // (내부에 있는 yaml 블록이나 코드는 절대 건드리지 않음)
+    const wholeCodeBlockMatch = cleaned.match(/^```[a-z]*\n([\s\S]*?)\n```$/i);
+    if (wholeCodeBlockMatch) {
+        cleaned = wholeCodeBlockMatch[1];
+    }
+
+    return cleaned
         .replace(/[^\S\r\n]{2,}/g, " ") // 스페이스랑 탭만 줄이고 줄바꿈(\r\n)은 절대 안 건드림!
         .trim();
 }
