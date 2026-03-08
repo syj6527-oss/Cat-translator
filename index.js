@@ -19,20 +19,26 @@ function saveSettings() {
     applyTheme(getModelTheme(settings.directModel)); updateCacheStats();
 }
 
-async function processMessage(id, isInput = false, abortSignal = null, silent = false) {
+async function processMessage(id, isInput = false, abortSignal = null, silent = false, isAutoEvent = false) {
     const msgId = parseInt(id, 10); const msg = stContext.chat[msgId]; if (!msg) return;
-    const startGlow = () => $(`.mes[mesid="${msgId}"]`).find('.cat-mes-trans-btn .cat-emoji-icon').addClass('cat-glow-anim');
-    const stopGlow = () => $(`.mes[mesid="${msgId}"]`).find('.cat-mes-trans-btn .cat-emoji-icon').removeClass('cat-glow-anim');
+    
+    const mesBlock = $(`.mes[mesid="${msgId}"]`);
+
+    // [버그 수정 1] 이벤트로 인한 자동 번역 시, 이미 번역된 노드면 즉시 스킵
+    if (isAutoEvent && mesBlock.attr('data-cat-translated') === 'true') return;
+    if (isAutoEvent && msg.extra?.display_text) return;
+
+    const startGlow = () => mesBlock.find('.cat-mes-trans-btn .cat-emoji-icon').addClass('cat-glow-anim');
+    const stopGlow = () => mesBlock.find('.cat-mes-trans-btn .cat-emoji-icon').removeClass('cat-glow-anim');
 
     // 자동번역 여부 판별
     const isAutoMode = (settings.autoMode !== 'none');
     const isAutoTriggered = isAutoMode && !abortSignal; // 벌크는 abortSignal 있음
 
-    if ($(`.mes[mesid="${msgId}"]`).find('.cat-mes-trans-btn .cat-emoji-icon.cat-glow-anim').length > 0) return;
+    if (mesBlock.find('.cat-mes-trans-btn .cat-emoji-icon.cat-glow-anim').length > 0) return;
     startGlow();
 
     try {
-        const mesBlock = $(`.mes[mesid="${msgId}"]`);
         const editArea = mesBlock.find('textarea.edit_textarea:visible, textarea.mes_edit_textarea:visible, textarea:visible').first();
         if (editArea.length > 0) { await handleEditAreaTranslation(editArea, msgId, abortSignal); return; }
 
@@ -78,6 +84,10 @@ async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTran
         // A방식: msg.mes + display_text 둘 다 수정 (상태창/주석 블록 대응)
         msg.extra.display_text = result.text;
         msg.mes = result.text;
+        
+        // [버그 수정 1] 번역 완료 마커 추가
+        $(`.mes[mesid="${msgId}"]`).attr('data-cat-translated', 'true');
+
         stContext.updateMessageBlock(msgId, msg);
         if (!silent) {
             const preview = result.text.substring(0, 25) + (result.text.length > 25 ? '...' : '');
@@ -106,6 +116,10 @@ function revertMessage(id) {
     if (editArea.length > 0) { const originalText = editArea.data('cat-original-text'); if (originalText) { setTextareaValue(editArea[0], originalText); editArea.removeData('cat-original-text').removeData('cat-last-translated').removeData('cat-last-target-lang'); catNotify(`${getThemeEmoji()} 원본 텍스트로 복구 완료!`, "success"); } else { catNotify("⚠️ 복구할 원본이 없습니다.", "warning"); } return; }
     if (msg.extra?.display_text) delete msg.extra.display_text;
     if (msg.extra?.original_mes) { msg.mes = msg.extra.original_mes; delete msg.extra.original_mes; }
+    
+    // 복구 시 마커 제거
+    $(`.mes[mesid="${msgId}"]`).removeAttr('data-cat-translated');
+    
     stContext.updateMessageBlock(msgId, msg); catNotify(`${getThemeEmoji()} 원문 복구 완료!`, "success");
 }
 function detectDir(text) { return detectLanguageDirection(text, settings); }
@@ -113,8 +127,8 @@ function detectDir(text) { return detectLanguageDirection(text, settings); }
 jQuery(async () => {
     try { await initCache(); console.log('[CAT] 🐱 IndexedDB 캐시 초기화 완료'); } catch (e) { console.warn('[CAT] IndexedDB 초기화 실패, 메모리 캐시로 대체:', e); }
     setupSettingsPanel(settings, stContext, saveSettings); setupDragDictionary(settings, saveSettings); setupMutationObserver(processMessage, revertMessage, settings, stContext);
-    stContext.eventSource.on(stContext.event_types.CHARACTER_MESSAGE_RENDERED, (d) => { if (settings.autoMode === 'none' || settings.autoMode === 'input') return; const msgId = typeof d === 'object' ? d.messageId : d; setTimeout(() => processMessage(msgId, false), 500); });
-    stContext.eventSource.on(stContext.event_types.USER_MESSAGE_RENDERED, (d) => { if (settings.autoMode === 'none' || settings.autoMode === 'output') return; const msgId = typeof d === 'object' ? d.messageId : d; setTimeout(() => processMessage(msgId, true), 500); });
+    stContext.eventSource.on(stContext.event_types.CHARACTER_MESSAGE_RENDERED, (d) => { if (settings.autoMode === 'none' || settings.autoMode === 'input') return; const msgId = typeof d === 'object' ? d.messageId : d; setTimeout(() => processMessage(msgId, false, null, false, true), 500); });
+    stContext.eventSource.on(stContext.event_types.USER_MESSAGE_RENDERED, (d) => { if (settings.autoMode === 'none' || settings.autoMode === 'output') return; const msgId = typeof d === 'object' ? d.messageId : d; setTimeout(() => processMessage(msgId, true, null, false, true), 500); });
     const bodyObserver = new MutationObserver(() => { applyTheme(getModelTheme(settings.directModel)); }); bodyObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
     console.log('[CAT] 🐯 Cat Translator Beta V2 로드 완료!');
 });
