@@ -1,16 +1,16 @@
 /* ============================================================
-   🐱 Cat Translator v18.4.0 - style.css (최종 레이아웃)
+   🐱 Cat Translator v18.4.2 - style.css
    ============================================================ */
 [data-cat-theme="cat"] { --ca-accent: #f0a030; --ca-bg: rgba(255, 165, 0, 0.08); --ca-border: rgba(255, 165, 0, 0.3); }
 [data-cat-theme="tiger"] { --ca-accent: #ffd700; --ca-bg: rgba(255, 215, 0, 0.08); --ca-border: rgba(255, 215, 0, 0.3); }
 
-/* 하단 버튼 그룹: 절대 안 찌그러지게 고정하여 전송 버튼과 분리 */
+/* 🚨 하단 아이콘 절대 찌그러짐 방지 필살기 */
 .cat-input-btn-group {
     display: inline-flex !important;
     align-items: center !important;
     gap: 8px !important;
     margin-right: 8px !important;
-    flex-shrink: 0 !important; 
+    flex-shrink: 0 !important; /* 🚨 전송 버튼과 절대 안 겹침 */
 }
 
 .cat-input-icon { 
@@ -18,19 +18,16 @@
     display: flex !important; 
     width: 28px !important; 
     height: 28px !important; 
-    flex-shrink: 0 !important; 
     justify-content: center;
     align-items: center;
     background: transparent !important;
-    border: none !important;
 }
 
 @media (max-width: 768px) {
-    .cat-input-btn-group { gap: 6px !important; margin-right: 4px !important; }
-    .cat-input-icon { width: 26px !important; height: 26px !important; }
+    .cat-input-btn-group { gap: 4px !important; margin-right: 4px !important; }
 }
 
 .cat-stats-bar { padding: 10px; background: var(--ca-bg); border: 1px solid var(--ca-border); border-radius: 8px; margin: 8px 0; text-align: center; font-size: 0.9em; }
-.cat-bulk-popup { background: var(--SmartThemeBlurTintColor, #222); border: 1px solid var(--ca-border); border-radius: 12px; padding: 5px; min-width: 140px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); z-index: 2147483647; }
+.cat-bulk-popup { background: var(--SmartThemeBlurTintColor, #222); border: 1px solid var(--ca-border); border-radius: 12px; padding: 5px; min-width: 150px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); z-index: 2147483647; }
 .cat-bulk-option { padding: 10px; cursor: pointer; color: var(--SmartThemeBodyColor); }
 .cat-bulk-option:hover { background: var(--ca-bg); color: var(--ca-accent); }
