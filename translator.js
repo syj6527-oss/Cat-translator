@@ -2,7 +2,7 @@
 // 🐱 Cat Translator v18.2.0 - translator.js
 // ============================================================
 import { secret_state, SECRET_KEYS } from '../../../../scripts/secrets.js';
-import { cleanResult, catNotify, detectLanguageDirection, getThemeEmoji, getCompletionEmoji } from './utils.js';
+import { cleanResult, catNotify, detectLanguageDirection, getThemeEmoji, getCompletionEmoji, getCacheModelKey } from './utils.js';
 import { getCached, setCached } from './cache.js';
 
 export const SYSTEM_SHIELD = `[ABSOLUTE DIRECTIVE - VIOLATION = FAILURE]
@@ -54,7 +54,8 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
     }
 
     if (!prevTranslation) {
-        const cached = await getCached(text, targetLang);
+        const modelKey = getCacheModelKey(settings);
+        const cached = await getCached(text, targetLang, modelKey);
         if (cached) {
             if (!silent) catNotify(`${getCompletionEmoji()} 캐시 히트! ~${Math.round(text.length * 0.5)} 토큰 절약`, "success");
             return { text: cached.translated, lang: targetLang, fromCache: true };
@@ -90,7 +91,7 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
 
         let cleaned = cleanResult(result);
         if (!cleaned || cleaned.trim().length === 0) { catNotify(`${getThemeEmoji()} 번역 결과가 비어있습니다. 원문 유지.`, "warning"); return null; }
-        await setCached(text, targetLang, cleaned, thought);
+        await setCached(text, targetLang, cleaned, thought, getCacheModelKey(settings));
         return { text: cleaned, lang: targetLang, fromCache: false };
     } catch (e) {
         if (e.name === 'AbortError') return null;

@@ -71,11 +71,11 @@ export function getStats() {
     };
 }
 
-// ─── 캐시 조회 (유사 문장 매칭) ─────────────────────
-export async function getCached(originalText, targetLang) {
+// ─── 캐시 조회 (유사 문장 매칭 + 모델별 분리) ─────────────────────
+export async function getCached(originalText, targetLang, modelKey = 'default') {
     if (!db) return null;
     const normalized = normalizeText(originalText);
-    const key = `${normalized}::${targetLang}`;
+    const key = `${normalized}::${targetLang}::${modelKey}`;
 
     try {
         const tx = db.transaction(STORE_TRANSLATIONS, 'readonly');
@@ -95,11 +95,11 @@ export async function getCached(originalText, targetLang) {
     return null;
 }
 
-// ─── 캐시 저장 ──────────────────────────────────────
-export async function setCached(originalText, targetLang, translated, thought = null) {
+// ─── 캐시 저장 (모델별 분리) ──────────────────────────────────────
+export async function setCached(originalText, targetLang, translated, thought = null, modelKey = 'default') {
     if (!db) return;
     const normalized = normalizeText(originalText);
-    const key = `${normalized}::${targetLang}`;
+    const key = `${normalized}::${targetLang}::${modelKey}`;
 
     try {
         const tx = db.transaction(STORE_TRANSLATIONS, 'readwrite');
@@ -132,11 +132,11 @@ export async function setCached(originalText, targetLang, translated, thought = 
     } catch (e) { console.error('[CAT] Cache write error:', e); }
 }
 
-// ─── 히스토리 조회 ──────────────────────────────────
-export async function getHistory(originalText, targetLang) {
+// ─── 히스토리 조회 (모델별) ──────────────────────────────────
+export async function getHistory(originalText, targetLang, modelKey = 'default') {
     if (!db) return [];
     const normalized = normalizeText(originalText);
-    const key = `${normalized}::${targetLang}`;
+    const key = `${normalized}::${targetLang}::${modelKey}`;
 
     try {
         const tx = db.transaction(STORE_TRANSLATIONS, 'readonly');
@@ -146,11 +146,11 @@ export async function getHistory(originalText, targetLang) {
     } catch (e) { return []; }
 }
 
-// ─── 즐겨찾기 핀 토글 ──────────────────────────────
-export async function togglePin(originalText, targetLang, translationText) {
+// ─── 즐겨찾기 핀 토글 (모델별) ──────────────────────────────
+export async function togglePin(originalText, targetLang, translationText, modelKey = 'default') {
     if (!db) return;
     const normalized = normalizeText(originalText);
-    const key = `${normalized}::${targetLang}`;
+    const key = `${normalized}::${targetLang}::${modelKey}`;
 
     try {
         const tx = db.transaction(STORE_TRANSLATIONS, 'readwrite');

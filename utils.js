@@ -58,8 +58,16 @@ export function cleanResult(text) {
         .replace(/^(번역|Translation|Output|Input|Result):\s*/gi, "")
         .replace(/```[\s\S]*?```/g, "")
         .replace(/`([^`]+)`/g, "$1")
-        .replace(/[^\S\r\n]{2,}/g, " ") // 스페이스랑 탭만 줄이고 줄바꿈(\r\n)은 절대 안 건드림!
+        .replace(/\r\n/g, "\n")              // \r\n → \n 통일
+        .replace(/\n{3,}/g, "\n\n")           // 연속 빈줄 3개 이상 → 2개로 정리
+        .replace(/[^\S\r\n]{2,}/g, " ")       // 스페이스랑 탭만 줄이고 줄바꿈은 절대 안 건드림!
         .trim();
+}
+
+// 모델별 캐시 분리용 키 생성
+export function getCacheModelKey(settings) {
+    if (settings.profile) return `profile:${settings.profile}`;
+    return settings.directModel || 'default';
 }
 
 export function getModelTheme(modelName) {

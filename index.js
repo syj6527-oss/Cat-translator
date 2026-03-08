@@ -2,7 +2,7 @@
 // 🐱 Cat Translator v18.2.0 "호랑이 각성" (UI/UX 튜닝판)
 // ============================================================
 import { extension_settings, getContext } from '../../../../scripts/extensions.js';
-import { catNotify, getThemeEmoji, getCompletionEmoji, setTextareaValue, getModelTheme, detectLanguageDirection } from './utils.js';
+import { catNotify, getThemeEmoji, getCompletionEmoji, setTextareaValue, getModelTheme, detectLanguageDirection, getCacheModelKey } from './utils.js';
 import { initCache } from './cache.js';
 import { fetchTranslation, gatherContextMessages } from './translator.js';
 import { setupSettingsPanel, collectSettings, updateCacheStats, injectMessageButtons, injectInputButtons, setupDragDictionary, setupMutationObserver, showHistoryPopup, applyTheme } from './ui.js';
@@ -50,13 +50,14 @@ async function processMessage(id, isInput = false, abortSignal = null, silent = 
         if (isRetranslation) {
             const anchorEl = mesBlock.find('.cat-mes-trans-btn');
             const detected = detectDir(textToTranslate);
+            const modelKey = getCacheModelKey(settings);
             const shown = await showHistoryPopup(textToTranslate, detected.targetLang, anchorEl, (selectedText, isNew) => {
                 if (isNew) {
                     doTranslateMessage(msgId, msg, textToTranslate, isInput, existingTranslation, abortSignal, true);
                 } else if (selectedText) {
                     if (!msg.extra) msg.extra = {}; msg.extra.display_text = selectedText; msg.mes = selectedText; stContext.updateMessageBlock(msgId, msg);
                 }
-            });
+            }, modelKey);
             if (shown) return; 
         }
         await doTranslateMessage(msgId, msg, textToTranslate, isInput, existingTranslation, abortSignal, silent);
