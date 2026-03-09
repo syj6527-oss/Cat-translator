@@ -167,7 +167,8 @@ function assemblePrompt(text, targetLang, isToEnglish, settings, options = {}) {
     
     if (settings.dictionary && settings.dictionary.trim()) {
         parts.push(`\n[MANDATORY GLOSSARY]`);
-        parts.push(`You MUST use the following glossary for specific terms. Apply natural morphological changes (plural, possessive, verb conjugations) according to the context without breaking the term's core meaning:`);
+        parts.push(`You MUST use the following glossary for specific terms. Apply natural morphological changes (plural, possessive, verb conjugations) according to the context without breaking the term's core meaning.`);
+        parts.push(`CRITICAL: Output ONLY the translated term. NEVER add the original word in brackets, parentheses, or any annotation like "소프[Soap]" or "소프(Soap)". Just use the glossary term directly.`);
         parts.push(settings.dictionary);
     }
 

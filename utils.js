@@ -112,9 +112,12 @@ export function detectLanguageDirection(text, settings) {
 
     if (total === 0) return { isToEnglish: false, targetLang: settings.targetLang };
     const korRatio = korCount / total; const engRatio = engCount / total;
+    const jpRatio = jpCount / total; const cnRatio = cnCount / total;
 
     if (korRatio >= 0.7) return { isToEnglish: true, targetLang: 'English' };
-    if (engRatio >= 0.7) return { isToEnglish: false, targetLang: 'Korean' };
+    if (engRatio >= 0.7) return { isToEnglish: false, targetLang: settings.targetLang };
+    if (jpRatio >= 0.5) return { isToEnglish: false, targetLang: settings.targetLang };
+    if (cnRatio >= 0.5) return { isToEnglish: false, targetLang: settings.targetLang };
     return { isToEnglish: false, targetLang: settings.targetLang };
 }
 

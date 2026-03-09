@@ -44,6 +44,15 @@ async function processMessage(id, isInput = false, abortSignal = null, silent = 
         const editArea = mesBlock.find('textarea.edit_textarea:visible, textarea.mes_edit_textarea:visible, textarea:visible').first();
         if (editArea.length > 0) { await handleEditAreaTranslation(editArea, msgId, abortSignal); return; }
 
+        // 🚨 스와이프/수정 감지: 현재 mes가 이전 번역/원본과 다르면 stale → 초기화
+        if (msg.extra?.original_mes && msg.extra?.display_text) {
+            if (msg.mes !== msg.extra.display_text && msg.mes !== msg.extra.original_mes) {
+                delete msg.extra.original_mes;
+                delete msg.extra.display_text;
+                mesBlock.removeAttr('data-cat-translated');
+            }
+        }
+        
         let textToTranslate = msg.extra?.original_mes || msg.mes;
         const existingTranslation = msg.extra?.display_text || null;
         const isRetranslation = !!existingTranslation;
@@ -98,8 +107,17 @@ async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTran
 async function handleEditAreaTranslation(editArea, msgId, abortSignal) {
     let currentText = editArea.val().trim(); if (!currentText) return;
     const lastTranslated = editArea.data('cat-last-translated'); const originalText = editArea.data('cat-original-text'); const lastTargetLang = editArea.data('cat-last-target-lang');
-    const isRetry = (lastTranslated && currentText === lastTranslated);
-    const textToTranslate = isRetry ? originalText : currentText; const forceLang = isRetry ? lastTargetLang : null; const prevTrans = isRetry ? currentText : null;
+    
+    // 🚨 stale 감지: 현재 텍스트가 이전 번역/원본 둘 다 아니면 새 세션 → 초기화
+    if (originalText && lastTranslated && currentText !== lastTranslated && currentText !== originalText) {
+        editArea.removeData('cat-original-text').removeData('cat-last-translated').removeData('cat-last-target-lang');
+    }
+    
+    const freshOriginal = editArea.data('cat-original-text');
+    const freshLastTranslated = editArea.data('cat-last-translated');
+    const freshLastTargetLang = editArea.data('cat-last-target-lang');
+    const isRetry = (freshLastTranslated && currentText === freshLastTranslated);
+    const textToTranslate = isRetry ? freshOriginal : currentText; const forceLang = isRetry ? freshLastTargetLang : null; const prevTrans = isRetry ? currentText : null;
     catNotify(isRetry ? `${getThemeEmoji()} 다른 표현으로 재번역 중...` : `${getThemeEmoji()} 스마트 번역 중...`, "success");
     const contextRange = parseInt(settings.contextRange) || 1; const contextMsgs = gatherContextMessages(msgId, stContext, contextRange);
     const result = await fetchTranslation(textToTranslate, settings, stContext, { forceLang, prevTranslation: prevTrans, contextMessages: contextMsgs, abortSignal });
