@@ -91,9 +91,13 @@ async function processMessage(id, isInput = false, abortSignal = null, silent = 
             const anchorEl = mesBlock.find('.cat-mes-trans-btn');
             const detected = detectDir(textToTranslate);
             const modelKey = getCacheModelKey(settings);
-            const shown = await showHistoryPopup(textToTranslate, detected.targetLang, anchorEl, (selectedText, isNew) => {
+            const shown = await showHistoryPopup(textToTranslate, detected.targetLang, anchorEl, async (selectedText, isNew) => {
                 if (isNew) {
-                    doTranslateMessage(msgId, msg, textToTranslate, isInput, existingTranslation, abortSignal, true);
+                    // 히스토리 팝업에서 새로 번역 → 자체 글로우 관리 (processMessage의 finally가 먼저 실행되므로)
+                    startGlow();
+                    try {
+                        await doTranslateMessage(msgId, msg, textToTranslate, isInput, existingTranslation, abortSignal, true);
+                    } finally { stopGlow(); }
                 } else if (selectedText) {
                     if (!msg.extra) msg.extra = {}; msg.extra.display_text = selectedText; msg.mes = selectedText; stContext.updateMessageBlock(msgId, msg);
                 }
@@ -133,10 +137,14 @@ async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTran
 async function handleEditAreaTranslation(editArea, msgId, abortSignal) {
     let currentText = editArea.val().trim(); if (!currentText) return;
     
-    // 🚨 수정창에 번역문이 그대로 채워져 있는 경우 감지 → original_mes 사용
+    // 🚨 수정창에 번역문이 채워져 있는 경우 감지 → original_mes 사용
+    // 코드박스 등 추가 콘텐츠가 붙어있을 수 있으므로 앞부분 매칭으로 판별
     const msg = stContext.chat[msgId];
-    if (msg?.extra?.original_mes && msg?.extra?.display_text && currentText === msg.extra.display_text) {
-        currentText = msg.extra.original_mes;
+    if (msg?.extra?.original_mes && msg?.extra?.display_text) {
+        const displayPrefix = msg.extra.display_text.substring(0, Math.min(50, msg.extra.display_text.length));
+        if (currentText === msg.extra.display_text || currentText.startsWith(displayPrefix)) {
+            currentText = msg.extra.original_mes;
+        }
     }
     
     const lastTranslated = editArea.data('cat-last-translated'); const originalText = editArea.data('cat-original-text'); const lastTargetLang = editArea.data('cat-last-target-lang');
