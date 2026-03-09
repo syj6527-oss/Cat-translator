@@ -70,7 +70,8 @@ async function processMessage(id, isInput = false, abortSignal = null, silent = 
             mesBlock.removeAttr('data-cat-translated');
         }
 
-        const isShowingTranslation = !isStale && msg.extra?.display_text && activeText === msg.extra.display_text;
+        const isShowingTranslation = !isStale && msg.extra?.display_text && msg.extra?.original_mes &&
+            (activeText === msg.extra.display_text || msg.mes === msg.extra.display_text);
 
         if (isShowingTranslation) {
             textToTranslate = msg.extra.original_mes;
@@ -131,6 +132,13 @@ async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTran
 
 async function handleEditAreaTranslation(editArea, msgId, abortSignal) {
     let currentText = editArea.val().trim(); if (!currentText) return;
+    
+    // 🚨 수정창에 번역문이 그대로 채워져 있는 경우 감지 → original_mes 사용
+    const msg = stContext.chat[msgId];
+    if (msg?.extra?.original_mes && msg?.extra?.display_text && currentText === msg.extra.display_text) {
+        currentText = msg.extra.original_mes;
+    }
+    
     const lastTranslated = editArea.data('cat-last-translated'); const originalText = editArea.data('cat-original-text'); const lastTargetLang = editArea.data('cat-last-target-lang');
     
     // 🚨 stale 감지: 현재 텍스트가 이전 번역/원본 둘 다 아니면 새 세션 → 초기화
