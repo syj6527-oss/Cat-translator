@@ -135,8 +135,22 @@ async function handleEditAreaTranslation(editArea, msgId, abortSignal) {
     if (!currentText) return;
     
     // 🚨 수정창에 번역문이 채워져 있는 경우 감지 → original_mes 사용
-    // 코드박스 등 추가 콘텐츠가 붙어있을 수 있으므로 앞부분 매칭으로 판별
+    // + 직전 아웃풋이 뒤에 딸려온 경우 → msg 기준으로 잘라내기
     const msg = stContext.chat[msgId];
+    
+    // ST가 DOM에서 긁어올 때 직전 아웃풋까지 딸려오는 문제 차단
+    // msg.mes 또는 original_mes와 비교하여 해당 메시지 범위만 추출
+    if (msg) {
+        const knownText = msg.extra?.display_text || msg.extra?.original_mes || msg.mes;
+        if (knownText && currentText.length > knownText.length * 1.5) {
+            // 현재 textarea가 알려진 텍스트보다 1.5배 이상 길면 → 뒤에 딸려온 게 있음
+            const knownPrefix = knownText.substring(0, Math.min(50, knownText.length));
+            if (currentText.startsWith(knownPrefix)) {
+                currentText = knownText;
+            }
+        }
+    }
+    
     if (msg?.extra?.original_mes && msg?.extra?.display_text) {
         const displayPrefix = msg.extra.display_text.substring(0, Math.min(50, msg.extra.display_text.length));
         if (currentText === msg.extra.display_text || currentText.startsWith(displayPrefix)) {
@@ -193,5 +207,4 @@ jQuery(async () => {
     const bodyObserver = new MutationObserver(() => { applyTheme(getModelTheme(settings.directModel)); }); bodyObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
     console.log('[CAT] 🐱 Translator v1.0.1 로드 완료!');
 });
-
 
