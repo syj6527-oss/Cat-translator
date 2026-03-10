@@ -113,11 +113,31 @@ export function detectLanguageDirection(text, settings) {
     if (total === 0) return { isToEnglish: false, targetLang: settings.targetLang };
     const korRatio = korCount / total; const engRatio = engCount / total;
     const jpRatio = jpCount / total; const cnRatio = cnCount / total;
+    const bidir = settings.bidirectional || 'off';
 
-    if (korRatio >= 0.7) return { isToEnglish: true, targetLang: 'English' };
-    if (engRatio >= 0.7) return { isToEnglish: false, targetLang: settings.targetLang };
-    if (jpRatio >= 0.5) return { isToEnglish: false, targetLang: settings.targetLang };
-    if (cnRatio >= 0.5) return { isToEnglish: false, targetLang: settings.targetLang };
+    // 양방향 꺼짐 → 무조건 목표 언어로만
+    if (bidir === 'off') {
+        return { isToEnglish: false, targetLang: settings.targetLang };
+    }
+
+    // 한↔영
+    if (bidir === 'ko-en') {
+        if (korRatio >= 0.7) return { isToEnglish: true, targetLang: 'English' };
+        if (engRatio >= 0.7) return { isToEnglish: false, targetLang: 'Korean' };
+    }
+
+    // 한↔일
+    if (bidir === 'ko-ja') {
+        if (korRatio >= 0.7) return { isToEnglish: false, targetLang: 'Japanese' };
+        if (jpRatio >= 0.5) return { isToEnglish: false, targetLang: 'Korean' };
+    }
+
+    // 한↔중
+    if (bidir === 'ko-zh') {
+        if (korRatio >= 0.7) return { isToEnglish: false, targetLang: 'Chinese' };
+        if (cnRatio >= 0.5) return { isToEnglish: false, targetLang: 'Korean' };
+    }
+
     return { isToEnglish: false, targetLang: settings.targetLang };
 }
 

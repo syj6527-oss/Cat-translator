@@ -58,7 +58,10 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
                     <input type="text" id="ct-model-custom" class="text_pole" placeholder="모델명 직접 입력" style="display:none; margin-top:4px;">
                 </div>
             </div>
-            <div class="cat-setting-row"><label>자동 모드</label><select id="ct-auto-mode" class="text_pole"><option value="none">꺼짐</option><option value="input">입력만</option><option value="output">출력만</option><option value="both">둘 다</option></select></div>
+            <div style="display:flex; gap:8px;">
+                <div class="cat-setting-row" style="flex:1;"><label>자동 번역</label><select id="ct-auto-mode" class="text_pole"><option value="none">꺼짐</option><option value="input">입력만</option><option value="output">출력만</option><option value="both">둘 다</option></select></div>
+                <div class="cat-setting-row" style="flex:1;"><label>양방향 번역</label><select id="ct-bidirectional" class="text_pole"><option value="off">꺼짐</option><option value="ko-en">한↔영</option><option value="ko-ja">한↔일</option><option value="ko-zh">한↔중</option></select></div>
+            </div>
             <div class="cat-setting-row"><label>목표 언어 (AI 기본)</label><select id="ct-lang" class="text_pole">${langOptions}</select></div>
             <div style="display:flex; gap:8px;">
                 <div class="cat-setting-row" style="flex:1;"><label>스타일</label><select id="ct-style" class="text_pole">${styleOptions}</select></div>
@@ -76,6 +79,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
                 </label>
                 <textarea id="ct-dictionary" class="text_pole" rows="3" placeholder="Ghost=고스트&#10;Soap=소프">${settings.dictionary || ''}</textarea>
             </div>
+            <div class="cat-setting-row"><label>아이콘 표시</label><select id="ct-icon-visibility" class="text_pole"><option value="all">전체 보기</option><option value="hide-input">입력창 숨기기</option><option value="hide-message">메시지창 숨기기</option></select></div>
             <div id="ct-cache-stats" class="cat-stats-bar"><span id="ct-cache-icon" style="font-size:1.3em;">🗂️</span> 캐시 히트율: ${statsData.hitRate}% | 절약 토큰: ~${statsData.tokensSaved.toLocaleString()}</div>
             <div style="display:flex; gap:8px; margin-top:4px;">
                 <button id="ct-clear-cache" class="menu_button cat-btn-secondary" style="flex:1;">🗑️ 캐시 삭제</button>
@@ -110,7 +114,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
     };
     
     // 모든 설정 필드에 자동 저장 연결
-    $('#ct-profile, #ct-auto-mode, #ct-lang, #ct-style, #ct-temperature, #ct-max-tokens, #ct-context-range, #ct-vertex-region').on('change', autoSave);
+    $('#ct-profile, #ct-auto-mode, #ct-bidirectional, #ct-lang, #ct-style, #ct-temperature, #ct-max-tokens, #ct-context-range, #ct-vertex-region').on('change', autoSave);
     $('#ct-key, #ct-vertex-key, #ct-vertex-project, #ct-model-custom, #ct-user-prompt, #ct-dictionary').on('input', autoSave);
     
     $('#ct-model').val(settings.directModel).on('change', function () {
@@ -143,7 +147,20 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
         }
     });
     $('#ct-style').val(settings.style || 'normal').on('change', function () { const preset = STYLE_PRESETS[$(this).val()]; if (preset) $('#ct-temperature').val(preset.temperature); });
-    $('#ct-auto-mode').val(settings.autoMode); $('#ct-lang').val(settings.targetLang); $('#ct-temperature').val(settings.temperature || 0.3);
+    $('#ct-auto-mode').val(settings.autoMode); $('#ct-bidirectional').val(settings.bidirectional || 'off'); $('#ct-lang').val(settings.targetLang); $('#ct-temperature').val(settings.temperature || 0.3);
+    
+    // 아이콘 표시 초기값 + 토글 로직
+    $('#ct-icon-visibility').val(settings.iconVisibility || 'all').on('change', function() {
+        const val = $(this).val();
+        if (val === 'hide-input') { $('#cat-input-btn, #cat-input-revert, #cat-bulk-btn').hide(); $('.cat-btn-group').show(); }
+        else if (val === 'hide-message') { $('#cat-input-btn, #cat-input-revert, #cat-bulk-btn').show(); $('.cat-btn-group').hide(); }
+        else { $('#cat-input-btn, #cat-input-revert, #cat-bulk-btn').show(); $('.cat-btn-group').show(); }
+        autoSave();
+    });
+    // 초기 적용
+    const initIconVis = settings.iconVisibility || 'all';
+    if (initIconVis === 'hide-input') { setTimeout(() => $('#cat-input-btn, #cat-input-revert, #cat-bulk-btn').hide(), 500); }
+    else if (initIconVis === 'hide-message') { setTimeout(() => $('.cat-btn-group').hide(), 500); }
     
     $('#ct-dictionary').on('input', function () {
         settings.dictionary = $(this).val();
@@ -164,10 +181,11 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
         if (!confirm('모든 설정을 초기값으로 되돌리시겠습니까?')) return;
         $('#ct-profile').val(''); $('#ct-key').val(''); $('#ct-vertex-key').val(''); $('#ct-vertex-project').val('');
         $('#ct-vertex-region').val('global'); $('#ct-model').val('gemini-2.0-flash'); $('#ct-model-custom').val('').hide();
-        $('#ct-auto-mode').val('none'); $('#ct-lang').val('Korean'); $('#ct-style').val('normal');
+        $('#ct-auto-mode').val('none'); $('#ct-bidirectional').val('off'); $('#ct-icon-visibility').val('all'); $('#ct-lang').val('Korean'); $('#ct-style').val('normal');
         $('#ct-temperature').val(0.3); $('#ct-max-tokens').val(8192); $('#ct-context-range').val(1);
         $('#ct-user-prompt').val(''); $('#ct-dictionary').val(''); $('#ct-dict-reset').text('📭');
         $('#ct-direct-settings').show(); $('#ct-vertex-extra').hide();
+        $('#cat-input-btn, #cat-input-revert, #cat-bulk-btn, .cat-btn-group').show();
         saveSettingsFn(); catNotify(`${getThemeEmoji()} 설정이 초기화되었습니다!`, "success");
     });
     $('#ct-export').on('click', () => { saveSettingsFn(); exportSettings(settings); catNotify(`${getThemeEmoji()} 설정 내보내기 완료!`, "success"); });
@@ -192,6 +210,7 @@ export function collectSettings() {
         vertexRegion: $('#ct-vertex-region').val() || 'global',
         directModel: modelVal === 'custom' ? ($('#ct-model-custom').val() || 'gemini-2.0-flash') : (modelVal || 'gemini-1.5-flash'),
         customModelName: $('#ct-model-custom').val() || '', autoMode: $('#ct-auto-mode').val() || 'none',
+        bidirectional: $('#ct-bidirectional').val() || 'off', iconVisibility: $('#ct-icon-visibility').val() || 'all',
         targetLang: $('#ct-lang').val() || 'Korean', style: $('#ct-style').val() || 'normal',
         temperature: parseFloat($('#ct-temperature').val()) || 0.3, maxTokens: parseInt($('#ct-max-tokens').val()) || 8192,
         contextRange: Math.min(6, Math.max(0, parseInt($('#ct-context-range').val()) || 1)),

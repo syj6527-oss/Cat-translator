@@ -10,7 +10,7 @@ import { setupSettingsPanel, collectSettings, updateCacheStats, injectMessageBut
 const EXT_NAME = "cat-translator";
 const stContext = getContext();
 
-const defaultSettings = { profile: '', customKey: '', vertexKey: '', vertexProject: '', vertexRegion: 'global', directModel: 'gemini-1.5-flash', customModelName: '', autoMode: 'none', targetLang: 'Korean', style: 'normal', temperature: 0.3, maxTokens: 8192, contextRange: 1, userPrompt: '', dictionary: '' };
+const defaultSettings = { profile: '', customKey: '', vertexKey: '', vertexProject: '', vertexRegion: 'global', directModel: 'gemini-1.5-flash', customModelName: '', autoMode: 'none', bidirectional: 'off', iconVisibility: 'all', targetLang: 'Korean', style: 'normal', temperature: 0.3, maxTokens: 8192, contextRange: 1, userPrompt: '', dictionary: '' };
 // 베타 → 정식 설정 마이그레이션 (기존 사용자 설정 보존)
 if (!extension_settings[EXT_NAME] && extension_settings["cat-translator-beta"]) {
     extension_settings[EXT_NAME] = { ...extension_settings["cat-translator-beta"] };
