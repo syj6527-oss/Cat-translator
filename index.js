@@ -130,7 +130,7 @@ async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTran
 async function handleEditAreaTranslation(editArea, msgId, abortSignal) {
     let currentText = editArea.val().trim(); if (!currentText) return;
     
-    // 🚨 DOM에서 긁혀온 hidden comment 제거
+    // 🚨 DOM에서 긁혀온 오염물 제거 (hidden comment + 코드박스 잔해)
     currentText = currentText.replace(/<!--[\s\S]*?-->/g, '').trim();
     if (!currentText) return;
     
@@ -147,21 +147,23 @@ async function handleEditAreaTranslation(editArea, msgId, abortSignal) {
         }
     }
     
-    // 🚨 핵심: msg.extra.original_mes가 있으면 무조건 신뢰 (영구 원본)
-    // 수정창에 번역문이 채워져 있어도 항상 original_mes 기준으로 번역
+    // 🚨 핵심: 재번역 vs 새 번역 판별
     let sourceText = currentText;
     let isReTranslation = false;
     
     if (msg?.extra?.original_mes) {
-        // original_mes가 존재 = 이미 번역된 적 있음
         if (currentText === msg.extra.display_text || 
             currentText === msg.extra.original_mes ||
             currentText === msg.mes) {
             // 수정 안 함 → original_mes에서 재번역
             sourceText = msg.extra.original_mes;
             isReTranslation = true;
+        } else {
+            // 🚨 사용자가 새 텍스트 입력 → 옛날 original_mes 삭제 (강제 초기화!)
+            delete msg.extra.original_mes;
+            delete msg.extra.display_text;
+            delete msg.extra.cat_swipe_id;
         }
-        // currentText가 위 셋 다 아님 → 사용자가 직접 수정한 새 텍스트 → sourceText = currentText 그대로
     }
     
     const prevTrans = isReTranslation ? (msg.extra?.display_text || null) : null;
@@ -177,9 +179,9 @@ async function handleEditAreaTranslation(editArea, msgId, abortSignal) {
         editArea.data('cat-last-translated', result.text);
         editArea.data('cat-last-target-lang', result.lang);
         
-        // 🚨 msg.extra에도 영구 저장 (수정창 닫았다 다시 열어도 유지)
+        // 🚨 msg.extra 영구 저장 — 무조건 덮어쓰기! (if 가드 없음)
         if (!msg.extra) msg.extra = {};
-        if (!msg.extra.original_mes) msg.extra.original_mes = sourceText;
+        msg.extra.original_mes = sourceText;
         msg.extra.display_text = result.text;
         if (msg.swipe_id !== undefined) msg.extra.cat_swipe_id = msg.swipe_id;
         
