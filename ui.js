@@ -234,13 +234,24 @@ export function applyTheme(theme, notify = false) {
 }
 
 export function injectInputButtons(settings, stContext, processMessageFn) {
-    if ($('#cat-input-btn').length > 0) { const icon = $('#cat-input-btn .cat-emoji-icon'); if (isTranslatingInput) icon.addClass('cat-glow-anim'); else icon.removeClass('cat-glow-anim'); return; }
+    if ($('#cat-input-btn').length > 0) {
+        const icon = $('#cat-input-btn .cat-emoji-icon'); if (isTranslatingInput) icon.addClass('cat-glow-anim'); else icon.removeClass('cat-glow-anim');
+        // 🚨 아이콘 숨김 설정 지속 적용
+        const vis = settings.iconVisibility || 'all';
+        if (vis === 'hide-input') { $('#cat-input-btn, #cat-input-revert, #cat-bulk-btn').hide(); }
+        return;
+    }
     const target = $('#send_but'); if (target.length === 0) return;
     const emoji = getThemeEmoji();
     const transBtn = $(`<div id="cat-input-btn" title="번역" class="cat-input-icon interactable"><span class="cat-emoji-icon">${emoji}</span></div>`);
     const revertBtn = $(`<div id="cat-input-revert" title="되돌리기" class="cat-input-icon interactable"><i class="fa-solid fa-rotate-left"></i></div>`);
     const bulkBtn = $(`<div id="cat-bulk-btn" title="전체 번역" class="cat-input-icon interactable"><span class="cat-emoji-icon">⚡</span></div>`);
     target.before(transBtn).before(revertBtn).before(bulkBtn);
+    
+    // 🚨 생성 직후 아이콘 숨김 설정 적용
+    if ((settings.iconVisibility || 'all') === 'hide-input') {
+        transBtn.hide(); revertBtn.hide(); bulkBtn.hide();
+    }
 
     transBtn.on('click', async (e) => {
         e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
@@ -274,6 +285,9 @@ export function injectMessageButtons(processMessageFn, revertMessageFn) {
         const group = $(`<div class="cat-btn-group"><span class="cat-mes-trans-btn interactable" title="번역" data-mesid="${msgId}"><span class="cat-emoji-icon">${emoji}</span></span><span class="cat-mes-revert-btn interactable" title="복구" data-mesid="${msgId}"><i class="fa-solid fa-rotate-left"></i></span></div>`);
         let target = $(this).find('.name_text'); if (target.length > 0) { target.append(group); } else { let sysWrap = $('<div style="text-align:right; margin-bottom:4px;"></div>'); sysWrap.append(group); $(this).find('.mes_text').first().prepend(sysWrap); }
     });
+    // 🚨 메시지 아이콘 숨김 설정 적용
+    const vis = $('#ct-icon-visibility').val() || 'all';
+    if (vis === 'hide-message') { $('.cat-btn-group').hide(); }
     if (!window._catMesBtnDelegated) {
         window._catMesBtnDelegated = true;
         $(document).on('click', '.cat-mes-trans-btn', function (e) { e.stopPropagation(); const msgId = $(this).data('mesid') || $(this).closest('.mes').attr('mesid'); const isUser = $(this).closest('.mes').hasClass('mes_user'); if (msgId !== undefined) processMessageFn(msgId, isUser); });
