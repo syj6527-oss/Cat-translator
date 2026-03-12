@@ -103,7 +103,7 @@ async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTran
     const contextRange = parseInt(settings.contextRange) || 1;
     const contextMsgs = gatherContextMessages(msgId, stContext, contextRange);
 
-    const result = await fetchTranslation(textToTranslate, settings, stContext, { forceLang, prevTranslation: isInput ? (msg.extra?.original_mes ? msg.mes : null) : prevTranslation, contextMessages: contextMsgs, abortSignal, silent });
+    const result = await fetchTranslation(textToTranslate, settings, stContext, { forceLang, prevTranslation: isInput ? (msg.extra?.display_text || null) : prevTranslation, contextMessages: contextMsgs, abortSignal, silent });
 
     if (result && result.text && result.text.trim() && result.text !== textToTranslate) {
         if (!msg.extra) msg.extra = {};
