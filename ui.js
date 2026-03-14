@@ -25,7 +25,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
     <div id="cat-trans-container" class="inline-drawer">
         <div id="cat-drawer-header" class="inline-drawer-header interactable" tabindex="0">
             <div class="inline-drawer-title"><span class="cat-theme-emoji">🐱</span><span>Translator</span></div>
-            <i id="cat-drawer-toggle" class="inline-drawer-toggle fa-solid fa-chevron-down"></i>
+            <i id="cat-drawer-toggle" class="inline-drawer-toggle fa-fw fa-solid fa-circle-chevron-down inline-drawer-icon down interactable"></i>
         </div>
         <div id="cat-drawer-content" class="inline-drawer-content" style="display:none; padding:10px;">
             <div class="cat-setting-row"><label>연결 프로필</label><select id="ct-profile" class="text_pole">${profileOptions}</select></div>
@@ -98,7 +98,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
 
     $('#extensions_settings').append(html);
 
-    $('#cat-drawer-header').on('click', (e) => { e.stopPropagation(); $('#cat-drawer-content').slideToggle(200); $('#cat-drawer-toggle').toggleClass('fa-chevron-down fa-chevron-up'); });
+    $('#cat-drawer-header').on('click', (e) => { e.stopPropagation(); $('#cat-drawer-content').slideToggle(200); $('#cat-drawer-toggle').toggleClass('fa-circle-chevron-down fa-circle-chevron-up'); });
     $('#ct-key-toggle').on('click', () => { const i = $('#ct-key'); i.attr('type', i.attr('type') === 'password' ? 'text' : 'password'); });
     $('#ct-vertex-key-toggle').on('click', () => { const i = $('#ct-vertex-key'); i.attr('type', i.attr('type') === 'password' ? 'text' : 'password'); });
     
@@ -130,11 +130,13 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
                     catNotify(`⚠️ Vertex 모델 사용 시 Vertex API Key가 필요합니다!`, "warning");
                 }
             }
+            // 🚨 bodyObserver 레이스 컨디션 방지: autoSave 전에 즉시 반영
+            settings.directModel = val;
             applyTheme(getModelTheme(val), true);
         }
         autoSave();
     });
-    $('#ct-model-custom').val(settings.customModelName || '').on('input', function () { applyTheme(getModelTheme($(this).val()), true); });
+    $('#ct-model-custom').val(settings.customModelName || '').on('input', function () { settings.customModelName = $(this).val(); applyTheme(getModelTheme($(this).val()), true); });
     $('#ct-profile').val(settings.profile).on('change', function () {
         settings.profile = $(this).val();
         $('#ct-direct-settings').toggle(settings.profile === '');

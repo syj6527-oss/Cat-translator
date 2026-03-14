@@ -35,6 +35,15 @@ Source: <!-- [Character Profiles]\\nDesires: To protect her forest.\\n-->
 Correct: <!-- [Character Profiles]\\nDesires: 그녀의 숲을 지키는 것.\\n-->
 
 If the input is a single word, return only the translated single word.
+
+[REGEX TRIGGER PRESERVATION]
+Some text uses special patterns as UI triggers for info boxes, status panels, etc.
+KEEP these trigger patterns EXACTLY as-is — do NOT translate the structural keywords:
+- {{keyword:...}} patterns: translate content inside but keep {{keyword:}} wrapper
+- Bracket patterns like [Status], [Info], [Scene]: keep the keyword in English
+- Special brackets 『...』, 【...】: keep the bracket style, translate content inside
+- Any pattern that looks like a UI/system tag: preserve it unchanged
+
 Output ONLY the final translated text.`;
 
 export const STYLE_PRESETS = {
