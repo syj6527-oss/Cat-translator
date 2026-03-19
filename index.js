@@ -5,12 +5,12 @@ import { extension_settings, getContext } from '../../../../scripts/extensions.j
 import { catNotify, getThemeEmoji, getCompletionEmoji, setTextareaValue, getModelTheme, detectLanguageDirection, getCacheModelKey } from './utils.js';
 import { initCache } from './cache.js';
 import { fetchTranslation, gatherContextMessages } from './translator.js';
-import { setupSettingsPanel, collectSettings, updateCacheStats, injectMessageButtons, injectInputButtons, setupDragDictionary, setupMutationObserver, showHistoryPopup, applyTheme } from './ui.js';
+import { setupSettingsPanel, collectSettings, updateCacheStats, injectMessageButtons, injectInputButtons, setupDragDictionary, setupMutationObserver, showHistoryPopup, applyTheme, setSuppressAutoSave, clearPendingAutoSave } from './ui.js';
 
 const EXT_NAME = "cat-translator";
 const stContext = getContext();
 
-const defaultSettings = { profile: '', customKey: '', vertexKey: '', vertexProject: '', vertexRegion: 'global', directModel: 'gemini-1.5-flash', customModelName: '', autoMode: 'none', bidirectional: 'off', dialogueBilingual: 'off', iconVisibility: 'all', targetLang: 'Korean', style: 'normal', temperature: 0.3, maxTokens: 8192, contextRange: 1, userPrompt: '', dictionary: '' };
+const defaultSettings = { profile: '', customKey: '', vertexKey: '', vertexProject: '', vertexRegion: 'global', directModel: 'gemini-1.5-flash', customModelName: '', autoMode: 'none', bidirectional: 'off', dialogueBilingual: 'off', iconVisibility: 'all', targetLang: 'Korean', style: 'normal', temperature: 0.3, maxTokens: 8192, contextRange: 1, userPrompt: '', dictionary: '', promptPresets: {}, charPresetMap: {} };
 // 베타 → 정식 설정 마이그레이션 (기존 사용자 설정 보존)
 if (!extension_settings[EXT_NAME] && extension_settings["cat-translator-beta"]) {
     extension_settings[EXT_NAME] = { ...extension_settings["cat-translator-beta"] };
@@ -241,6 +241,50 @@ jQuery(async () => {
     stContext.eventSource.on(stContext.event_types.CHARACTER_MESSAGE_RENDERED, (d) => { if (settings.autoMode === 'none' || settings.autoMode === 'input') return; const msgId = typeof d === 'object' ? d.messageId : d; setTimeout(() => processMessage(msgId, false, null, false, true), 500); });
     stContext.eventSource.on(stContext.event_types.USER_MESSAGE_RENDERED, (d) => { if (settings.autoMode === 'none' || settings.autoMode === 'output') return; const msgId = typeof d === 'object' ? d.messageId : d; setTimeout(() => processMessage(msgId, true, null, false, true), 500); });
     const bodyObserver = new MutationObserver(() => { applyTheme(getCurrentTheme()); }); bodyObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    // 🚨 캐릭터 전환 시 번역 프롬프트 자동 로드
+    stContext.eventSource.on(stContext.event_types.CHAT_CHANGED, () => {
+        setTimeout(() => {
+            // 🚨 전환 시점의 최신 캐릭터 이름 사용
+            const charName = (SillyTavern?.getContext?.()?.name2) || stContext.name2 || '';
+            if (!charName || charName === 'SillyTavern System') return;
+            console.log(`[CAT] 📋 캐릭터 전환: "${charName}", 매핑: ${settings.charPresetMap?.[charName] || '없음'}`);
+            
+            // 🚨 프리셋 로드 전: 대기 중인 autoSave 취소 + 억제 ON
+            clearPendingAutoSave();
+            setSuppressAutoSave(true);
+            
+            const presetName = settings.charPresetMap?.[charName];
+            if (presetName && settings.promptPresets?.[presetName]) {
+                const preset = settings.promptPresets[presetName];
+                settings.userPrompt = preset.prompt || '';
+                settings.temperature = preset.temperature ?? 0.3;
+                settings.style = preset.style || 'normal';
+                $('#ct-user-prompt').val(settings.userPrompt);
+                $('#ct-style').val(settings.style);
+                $('#ct-temperature').val(settings.temperature);
+                $('#ct-prompt-preset').val(presetName);
+                // 🚨 직접 저장 (autoSave 디바운스 충돌 방지)
+                extension_settings[EXT_NAME] = { ...settings };
+                stContext.saveSettingsDebounced();
+                catNotify(`${getThemeEmoji()} ${charName} → 프롬프트 "${presetName}" 자동 로드!`, "success");
+            } else {
+                // 매핑 없는 캐릭터 → 기본값으로 리셋
+                settings.userPrompt = '';
+                settings.temperature = 0.3;
+                settings.style = 'normal';
+                $('#ct-user-prompt').val('');
+                $('#ct-style').val('normal');
+                $('#ct-temperature').val(0.3);
+                $('#ct-prompt-preset').val('');
+                // 🚨 직접 저장
+                extension_settings[EXT_NAME] = { ...settings };
+                stContext.saveSettingsDebounced();
+            }
+            
+            // 🚨 프리셋 로드 완료: 억제 OFF
+            setSuppressAutoSave(false);
+        }, 500);
+    });
     console.log('[CAT] 🐱 Translator v1.0.2 로드 완료!');
 });
 

@@ -7,8 +7,17 @@ import { fetchTranslation, gatherContextMessages, SYSTEM_SHIELD, STYLE_PRESETS }
 
 let bulkAbortController = null;
 let isTranslatingInput = false;
+let _settingsRef = null;  // 🚨 collectSettings에서 promptPresets/charPresetMap 접근용
+let _suppressAutoSave = false;  // 🚨 프리셋 로드 중 autoSave/스타일핸들러 차단
+let _autoSaveTimer = null;  // 🚨 모듈 스코프로 이동 (CHAT_CHANGED에서 접근 필요)
+
+/** 프리셋 로드 시 autoSave 레이스 컨디션 방지용 */
+export function setSuppressAutoSave(val) { _suppressAutoSave = val; }
+/** 대기 중인 autoSave 타이머 취소 */
+export function clearPendingAutoSave() { clearTimeout(_autoSaveTimer); _autoSaveTimer = null; }
 
 export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
+    _settingsRef = settings;  // 🚨 collectSettings에서 접근용
     if ($('#cat-trans-container').length) return;
 
     let profileOptions = '<option value="">⚡ 직접 연결 모드</option>';
@@ -74,8 +83,19 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
                 <div class="cat-setting-row" style="flex:1;"><label>토큰</label><input type="number" id="ct-max-tokens" class="text_pole" value="${settings.maxTokens || ''}" min="256" max="20000" step="256" placeholder="권장 8192"></div>
                 <div class="cat-setting-row" style="width:100px;"><label>문맥 범위</label><input type="number" id="ct-context-range" class="text_pole" value="${settings.contextRange || ''}" min="0" max="6" step="1" placeholder="최대 6"></div>
             </div>
-            <div class="cat-setting-row"><label>시스템 보호막 (🔒 고정)</label><textarea id="ct-shield" class="text_pole cat-readonly-area" rows="3" readonly>${SYSTEM_SHIELD}</textarea></div>
-            <div class="cat-setting-row"><label>추가 지시사항 (사용자 정의)</label><textarea id="ct-user-prompt" class="text_pole" rows="3" placeholder="번역 스타일, 상황극 설정 등 자유롭게 입력">${settings.userPrompt || ''}</textarea></div>
+            <div class="cat-setting-row" style="display:none"><label>시스템 보호막 (🔒 고정)</label><textarea id="ct-shield" class="text_pole cat-readonly-area" rows="3" readonly>${SYSTEM_SHIELD}</textarea></div>
+            <div class="cat-setting-row">
+                <label style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:4px;">
+                    <span>추가 지시사항</span>
+                    <span style="display:inline-flex; gap:4px; align-items:center;">
+                        <select id="ct-prompt-preset" class="text_pole" style="width:auto; min-width:80px; font-size:0.85em; padding:2px 4px;"><option value="">없음</option></select>
+                        <span id="ct-prompt-save" style="cursor:pointer; font-size:1.2em;" title="현재 지시사항 + 온도를 프롬프트로 저장">💾</span>
+                        <span id="ct-prompt-delete" style="cursor:pointer; font-size:1.2em;" title="선택한 프롬프트 삭제">🗑️</span>
+                        <span id="ct-prompt-link" style="cursor:pointer; font-size:1.2em;" title="현재 캐릭터에 프롬프트 연결">🔗</span>
+                    </span>
+                </label>
+                <textarea id="ct-user-prompt" class="text_pole" rows="3" placeholder="번역 스타일, 상황극 설정 등 자유롭게 입력">${settings.userPrompt || ''}</textarea>
+            </div>
             <div class="cat-setting-row">
                 <label>사전 (원문 = 번역어) 
                     <span id="ct-dict-reset" style="float:right; cursor:pointer; font-size:1.4em; transition:0.2s;" title="사전 지우기 (우편함 비우기)">${dictIcon}</span>
@@ -107,10 +127,11 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
     $('#ct-vertex-region').val(settings.vertexRegion || 'global');
     
     // 🚨 자동 저장 디바운스 시스템
-    let _autoSaveTimer = null;
     const autoSave = () => {
+        if (_suppressAutoSave) return;  // 🚨 프리셋 로드 중 차단
         clearTimeout(_autoSaveTimer);
         _autoSaveTimer = setTimeout(() => {
+            if (_suppressAutoSave) return;  // 🚨 타이머 실행 시점에도 재확인
             saveSettingsFn();
             catNotify(`${getCompletionEmoji()} 설정이 자동 저장되었습니다.`, "autosave");
         }, 500);
@@ -151,7 +172,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
             applyTheme('cat', true);
         }
     });
-    $('#ct-style').val(settings.style || 'normal').on('change', function () { const preset = STYLE_PRESETS[$(this).val()]; if (preset) $('#ct-temperature').val(preset.temperature); });
+    $('#ct-style').val(settings.style || 'normal').on('change', function () { if (_suppressAutoSave) return; const preset = STYLE_PRESETS[$(this).val()]; if (preset) $('#ct-temperature').val(preset.temperature); });
     $('#ct-auto-mode').val(settings.autoMode); $('#ct-bidirectional').val(settings.bidirectional || 'off'); $('#ct-dialogue-bilingual').val(settings.dialogueBilingual || 'off'); $('#ct-lang').val(settings.targetLang); $('#ct-temperature').val(settings.temperature || 0.3);
     
     // 대사 병기 변경 시 알림
@@ -187,6 +208,92 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
     });
     
     $('#ct-user-prompt').on('input', function () { settings.userPrompt = $(this).val(); });
+    
+    // 🚨 번역 프롬프트 프리셋 시스템
+    const _rebuildPresetDropdown = () => {
+        const select = $('#ct-prompt-preset');
+        const currentVal = select.val();
+        select.find('option:not(:first)').remove();
+        Object.keys(settings.promptPresets || {}).forEach(name => {
+            select.append(`<option value="${name}">${name}</option>`);
+        });
+        if (currentVal && settings.promptPresets?.[currentVal]) select.val(currentVal);
+    };
+    _rebuildPresetDropdown();
+    
+    // 프롬프트 선택 시 로드
+    $('#ct-prompt-preset').on('change', function() {
+        const name = $(this).val();
+        if (!name) return;
+        const preset = settings.promptPresets?.[name];
+        if (preset) {
+            _suppressAutoSave = true;  // 🚨 로드 중 autoSave/스타일핸들러 차단
+            clearTimeout(_autoSaveTimer);
+            settings.userPrompt = preset.prompt || '';
+            settings.temperature = preset.temperature ?? 0.3;
+            settings.style = preset.style || 'normal';
+            $('#ct-user-prompt').val(settings.userPrompt);
+            $('#ct-style').val(settings.style);
+            $('#ct-temperature').val(settings.temperature);
+            _suppressAutoSave = false;
+            saveSettingsFn();
+            catNotify(`${getThemeEmoji()} 프롬프트 "${name}" 로드!`, "success");
+        }
+    });
+    
+    // 프롬프트 저장
+    $('#ct-prompt-save').on('click', function() {
+        const currentPrompt = $('#ct-user-prompt').val().trim();
+        if (!currentPrompt) { catNotify(`⚠️ 추가 지시사항이 비어있습니다.`, "warning"); return; }
+        const name = prompt('프롬프트 이름을 입력하세요:', $('#ct-prompt-preset').val() || '');
+        if (!name || !name.trim()) return;
+        if (!settings.promptPresets) settings.promptPresets = {};
+        settings.promptPresets[name.trim()] = { prompt: currentPrompt, temperature: parseFloat($('#ct-temperature').val()) || 0.3, style: $('#ct-style').val() || 'normal' };
+        _rebuildPresetDropdown();
+        $('#ct-prompt-preset').val(name.trim());
+        saveSettingsFn();
+        catNotify(`${getThemeEmoji()} 프롬프트 "${name.trim()}" 저장 완료!`, "success");
+    });
+    
+    // 프롬프트 삭제
+    $('#ct-prompt-delete').on('click', function() {
+        const name = $('#ct-prompt-preset').val();
+        if (!name) { catNotify(`⚠️ 삭제할 프롬프트를 선택하세요.`, "warning"); return; }
+        if (!confirm(`"${name}" 프롬프트를 삭제하시겠습니까?`)) return;
+        delete settings.promptPresets?.[name];
+        // 연결된 캐릭터 매핑도 정리
+        if (settings.charPresetMap) {
+            Object.keys(settings.charPresetMap).forEach(char => {
+                if (settings.charPresetMap[char] === name) delete settings.charPresetMap[char];
+            });
+        }
+        $('#ct-prompt-preset').val('');
+        _rebuildPresetDropdown();
+        saveSettingsFn();
+        catNotify(`${getThemeEmoji()} 프롬프트 "${name}" 삭제 완료!`, "success");
+    });
+    
+    // 현재 캐릭터에 프롬프트 연결
+    $('#ct-prompt-link').on('click', function() {
+        const name = $('#ct-prompt-preset').val();
+        // 🚨 클릭 시점의 최신 캐릭터 이름 사용
+        const charName = (SillyTavern?.getContext?.()?.name2) || stContext.name2 || '';
+        if (!charName || charName === 'SillyTavern System') {
+            catNotify(`⚠️ 캐릭터 채팅을 먼저 열어주세요!`, "warning"); return;
+        }
+        if (!settings.charPresetMap) settings.charPresetMap = {};
+        if (!name) {
+            // 연결 해제
+            delete settings.charPresetMap[charName];
+            saveSettingsFn();
+            catNotify(`${getThemeEmoji()} ${charName} 프롬프트 연결 해제!`, "success");
+        } else {
+            settings.charPresetMap[charName] = name;
+            saveSettingsFn();
+            catNotify(`${getThemeEmoji()} ${charName} → "${name}" 연결 완료!`, "success");
+        }
+    });
+    
     $('#ct-context-range').on('change', function () { let val = parseInt($(this).val()) || 0; val = Math.min(6, Math.max(0, val)); $(this).val(val); });
     $('#cat-save-btn').on('click', () => { saveSettingsFn(); catNotify(`${getThemeEmoji()} 저장 완료! 테마가 동기화되었습니다.`, "success"); });
     $('#ct-clear-cache').on('click', async () => { await clearAllCache(); updateCacheStats(); catNotify(`${getThemeEmoji()} 캐시 전체 삭제 완료! 📂`, "success"); });
@@ -197,6 +304,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
         $('#ct-auto-mode').val('none'); $('#ct-bidirectional').val('off'); $('#ct-dialogue-bilingual').val('off'); $('#ct-icon-visibility').val('all'); $('#ct-lang').val('Korean'); $('#ct-style').val('normal');
         $('#ct-temperature').val(0.3); $('#ct-max-tokens').val(8192); $('#ct-context-range').val(1);
         $('#ct-user-prompt').val(''); $('#ct-dictionary').val(''); $('#ct-dict-reset').text('📭');
+        settings.promptPresets = {}; settings.charPresetMap = {}; $('#ct-prompt-preset').val('').find('option:not(:first)').remove();
         $('#ct-direct-settings').show(); $('#ct-vertex-extra').hide();
         $('#cat-input-btn, #cat-input-revert, #cat-bulk-btn').show(); $('.cat-btn-group').removeClass('cat-hidden');
         saveSettingsFn(); catNotify(`${getThemeEmoji()} 설정이 초기화되었습니다!`, "success");
@@ -227,7 +335,8 @@ export function collectSettings() {
         targetLang: $('#ct-lang').val() || 'Korean', style: $('#ct-style').val() || 'normal',
         temperature: parseFloat($('#ct-temperature').val()) || 0.3, maxTokens: parseInt($('#ct-max-tokens').val()) || 8192,
         contextRange: Math.min(6, Math.max(0, parseInt($('#ct-context-range').val()) || 1)),
-        userPrompt: $('#ct-user-prompt').val() || '', dictionary: $('#ct-dictionary').val() || ''
+        userPrompt: $('#ct-user-prompt').val() || '', dictionary: $('#ct-dictionary').val() || '',
+        promptPresets: _settingsRef?.promptPresets || {}, charPresetMap: _settingsRef?.charPresetMap || {}
     };
 }
 export function updateCacheStats() {
@@ -505,31 +614,48 @@ export function setupMutationObserver(processMessageFn, revertMessageFn, setting
     const chatContainer = document.getElementById('chat'); if (!chatContainer) { setTimeout(() => setupMutationObserver(processMessageFn, revertMessageFn, settings, stContext), 500); return; }
     const observer = new MutationObserver((mutations) => { let needsButtonInjection = false; for (const mutation of mutations) { if (mutation.addedNodes.length > 0) { needsButtonInjection = true; break; } } if (needsButtonInjection) { injectMessageButtons(processMessageFn, revertMessageFn); injectInputButtons(settings, stContext, processMessageFn); }
         // 🚨 편집 모드 호환: 번역된 메시지의 edit textarea에 display_text 표시
-        $('.mes[data-cat-translated="true"]').each(function() {
+        // ST가 편집 모드 진입 시 data-cat-translated를 제거하므로, msg.extra로 판별
+        $('.mes').each(function() {
             const mesBlock = $(this);
             const editArea = mesBlock.find('textarea.edit_textarea:visible, textarea.mes_edit_textarea:visible').first();
             const msgId = parseInt(mesBlock.attr('mesid'));
             const msg = stContext.chat[msgId];
-            if (!msg?.extra?.display_text) return;
+            if (!msg) return;
+            
+            // 번역 데이터가 없는 메시지는 스킵 (백업 데이터도 확인)
+            const hasTransData = msg.extra?.original_mes || mesBlock.data('cat-edit-original');
+            if (!hasTransData) return;
             
             if (editArea.length > 0 && !mesBlock.data('cat-edit-active')) {
-                // 편집 모드 진입: display_text를 textarea에 표시
+                // 편집 모드 진입: display_text를 백업하고 textarea에 표시
                 mesBlock.data('cat-edit-active', true);
-                if (editArea.val() === msg.mes && msg.mes !== msg.extra.display_text) {
+                if (msg.extra?.display_text) mesBlock.data('cat-edit-display', msg.extra.display_text);
+                if (msg.extra?.original_mes) mesBlock.data('cat-edit-original', msg.extra.original_mes);
+                if (editArea.val() === msg.mes && msg.extra?.display_text && msg.mes !== msg.extra.display_text) {
                     setTextareaValue(editArea[0], msg.extra.display_text);
                 }
             } else if (editArea.length === 0 && mesBlock.data('cat-edit-active')) {
-                // 편집 모드 종료: msg.mes 상태 복원
+                // 편집 모드 종료
                 mesBlock.removeData('cat-edit-active');
-                if (msg.mes === msg.extra.display_text) {
-                    // 수정 없이 저장 → msg.mes를 원문으로 복원
-                    msg.mes = msg.extra.original_mes || msg.mes;
-                } else if (msg.mes !== msg.extra.original_mes && msg.mes !== msg.extra.display_text) {
-                    // 사용자가 새 텍스트로 수정 → 번역 데이터 초기화
-                    delete msg.extra.original_mes;
-                    delete msg.extra.display_text;
-                    delete msg.extra.cat_swipe_id;
-                    mesBlock.removeAttr('data-cat-translated');
+                const savedDisplay = mesBlock.data('cat-edit-display');
+                const savedOriginal = mesBlock.data('cat-edit-original');
+                mesBlock.removeData('cat-edit-display').removeData('cat-edit-original');
+                
+                if (savedDisplay && savedOriginal) {
+                    if (msg.mes === savedDisplay) {
+                        // 수정 없이 저장 → 원문 복원 + display_text 재설정
+                        msg.mes = savedOriginal;
+                        if (!msg.extra) msg.extra = {};
+                        msg.extra.original_mes = savedOriginal;
+                        msg.extra.display_text = savedDisplay;
+                        mesBlock.attr('data-cat-translated', 'true');
+                    } else if (msg.mes !== savedOriginal && msg.mes !== savedDisplay) {
+                        // 사용자가 새 텍스트로 수정 → 번역 데이터 초기화
+                        delete msg.extra?.original_mes;
+                        delete msg.extra?.display_text;
+                        delete msg.extra?.cat_swipe_id;
+                        mesBlock.removeAttr('data-cat-translated');
+                    }
                 }
                 stContext.updateMessageBlock(msgId, msg);
             }
