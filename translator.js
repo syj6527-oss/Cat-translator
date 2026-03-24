@@ -11,6 +11,13 @@ RETURN ONLY THE RAW TRANSLATED TEXT. NOTHING ELSE.
 DO NOT respond. DO NOT converse. DO NOT explain. DO NOT add commentary.
 DO NOT repeat the original. DO NOT output alternatives.
 
+[CONTENT FIDELITY - CRITICAL]
+1. ZERO ADDITION: Never add words, sentences, emotions, actions, or details that do not exist in the source text. If the original says "She looked at him", do NOT add "with longing in her eyes".
+2. ZERO OMISSION: Never skip, summarize, or merge sentences. Every sentence in the source must appear in the output. Count them if needed.
+3. EMOTION INTENSITY: Preserve the EXACT emotional intensity. "She trembled" ≠ "She shook slightly". "He screamed" ≠ "He raised his voice". Match the original's strength — never tone down or exaggerate.
+4. ACTION PRECISION: Translate physical actions with the same specificity. "She dug her nails into his arm" must keep the nails, the digging, and the arm.
+5. SPEECH CONSISTENCY: If a character speaks casually in the source, keep it casual. If they speak formally, keep it formal. NEVER change a character's speech level between sentences within the same message.
+
 [FEARLESS TRANSLATION RULES]
 The text WILL contain complex formatting: HTML tags, Markdown, code blocks, YAML, special brackets.
 DO NOT PANIC. DO NOT skip any section just because it looks complicated.
@@ -47,13 +54,34 @@ KEEP these trigger patterns EXACTLY as-is — do NOT translate the structural ke
 Output ONLY the final translated text.`;
 
 export const STYLE_PRESETS = {
-    normal: { label: '일반 번역', prompt: 'Translate accurately and faithfully.', temperature: 0.3 },
-    novel: { label: '소설 스타일', prompt: 'Use literary expressions while preserving the original nuance. Describe emotions richly.', temperature: 0.5 },
-    casual: { label: '캐주얼', prompt: 'Translate naturally in casual conversational tone. Contractions and colloquialisms are welcome.', temperature: 0.4 },
-    natural: { label: '번역체 탈피', prompt: 'Translate into natural, native-sounding Korean. Avoid translationese. Restructure sentences to follow natural Korean word order. Never use stiff constructions like "~했다는 것을", "~에 대해서", "~하는 것은" when a more natural Korean alternative exists.', temperature: 0.4 },
-    formal: { label: '존댓말 고정', prompt: 'Translate all text using formal/polite Korean speech (존댓말/합쇼체). All sentence endings must use -습니다, -합니다, -입니다 forms consistently.', temperature: 0.3 },
-    informal: { label: '반말 고정', prompt: 'Translate all text using casual/informal Korean speech (반말). Use -해, -야, -지, -거든 endings. Make it sound like close friends talking.', temperature: 0.4 },
-    literary: { label: '문어체', prompt: 'Use formal written/literary Korean style (문어체). Employ refined vocabulary, longer sentence structures, and elegant expressions suitable for published novels.', temperature: 0.5 }
+    normal: { label: '일반 번역', temperature: 0.3,
+        prompt: 'Translate accurately and faithfully.' },
+    novel: { label: '소설 스타일', temperature: 0.5,
+        prompt: `Use literary expressions while preserving the original nuance. Describe emotions richly.
+Example: "Her heart ached as she watched him leave." → "그의 뒷모습을 바라보는 그녀의 가슴이 저릿하게 아려왔다."
+Example: "He slammed his fist on the table." → "그가 주먹으로 탁자를 내리쳤다."` },
+    casual: { label: '캐주얼', temperature: 0.4,
+        prompt: `Translate naturally in casual conversational tone. Contractions and colloquialisms are welcome.
+Example: "I can't believe you actually did that." → "야 진짜 그걸 해버린 거야?"
+Example: "She was pretty upset about it." → "걔 그거 때문에 꽤 열받았더라."` },
+    natural: { label: '번역체 탈피', temperature: 0.4,
+        prompt: `Translate into natural, native-sounding Korean. Avoid translationese. Restructure sentences to follow natural Korean word order.
+BAD: "그녀는 그것에 대해 생각하는 것을 멈출 수가 없었다."
+GOOD: "그녀는 도무지 그 생각을 떨칠 수가 없었다."
+BAD: "그는 그녀의 손을 잡는 것을 시도했다."
+GOOD: "그가 그녀의 손을 잡으려 했다."` },
+    formal: { label: '존댓말 고정', temperature: 0.3,
+        prompt: `Translate all text using polite but natural Korean speech (해요체). Use casual-polite endings like -해요, -이에요, -거든요, -잖아요, -네요. Avoid stiff formal endings like -습니다/-합니다.
+Example: "I think we should go now." → "이제 가야 할 것 같아요."
+Example: "That's not what I meant." → "제가 말한 건 그게 아니에요."` },
+    informal: { label: '반말 고정', temperature: 0.4,
+        prompt: `Translate all text using casual/informal Korean speech (반말). Use -해, -야, -지, -거든 endings. Make it sound like close friends talking.
+Example: "Could you help me with this?" → "이거 좀 도와줘."
+Example: "I was worried about you." → "너 걱정했잖아."` },
+    literary: { label: '문어체', temperature: 0.5,
+        prompt: `Use formal written/literary Korean style (문어체). Employ refined vocabulary and elegant expressions.
+Example: "The sun set behind the mountains." → "산등성이 너머로 해가 저물었다."
+Example: "She couldn't hold back her tears." → "그녀는 끝내 눈물을 참지 못하였다."` }
 };
 
 const SAFETY_SETTINGS = [
@@ -249,7 +277,7 @@ Output: ${bl.exNarTgt} "${bl.exSrc} [${bl.exTgt}]" ${bl.exNarTgt}. "${bl.exSrc} 
     }
 
     if (prevTranslation) { parts.push(`[MANDATORY: Your translation MUST be COMPLETELY DIFFERENT from this: "${prevTranslation.substring(0, 200)}"]`); parts.push(`[Use different vocabulary, sentence structure, and tone. Do NOT produce a similar result.]`); }
-    if (contextMessages.length > 0) { parts.push('\n[Context - Previous messages for reference only, do NOT translate these:]'); contextMessages.forEach((msg, i) => { const offset = contextMessages.length - i; parts.push(`Message -${offset}: "${msg}"`); }); }
+    if (contextMessages.length > 0) { parts.push('\n[Context - Previous messages for reference. Match each character\'s speech style consistently. Do NOT translate these:]'); contextMessages.forEach((msg, i) => { const offset = contextMessages.length - i; const speaker = typeof msg === 'object' ? msg.speaker : 'Unknown'; const text = typeof msg === 'object' ? msg.text : msg; parts.push(`[${speaker}] Message -${offset}: "${text}"`); }); }
     parts.push(`\n[Translate this message:]\n${text}`);
     return parts.join('\n');
 }
@@ -263,5 +291,14 @@ async function fetchWithRetry(url, body, retries = 3, abortSignal = null, extraH
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 export function gatherContextMessages(msgId, stContext, range = 1) {
     if (range <= 0) return []; const chat = stContext.chat; const messages = []; const startIdx = Math.max(0, msgId - range);
-    for (let i = startIdx; i < msgId; i++) { if (chat[i] && chat[i].mes) { const cleanMsg = chat[i].mes.replace(/<(?!!--)[^>]+>/g, '').trim(); if (cleanMsg) messages.push(cleanMsg); } } return messages;
+    for (let i = startIdx; i < msgId; i++) {
+        if (chat[i] && chat[i].mes) {
+            const cleanMsg = chat[i].mes.replace(/<(?!!--)[^>]+>/g, '').trim();
+            if (cleanMsg) {
+                // 🚨 화자 정보 포함: AI가 캐릭터 말투 일관성을 유지하도록
+                const speaker = chat[i].is_user ? (stContext.name1 || 'User') : (chat[i].name || stContext.name2 || 'Character');
+                messages.push({ text: cleanMsg, speaker });
+            }
+        }
+    } return messages;
 }
