@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Translator v1.0.3 - ui.js
+// 🐱 Translator v1.0.4 - ui.js
 // ============================================================
 import { catNotify, catNotifyProgress, getThemeEmoji, getCompletionEmoji, getModelTheme, setTextareaValue } from './utils.js';
 import { getStats, clearAllCache, exportSettings, importSettings, getHistory, togglePin } from './cache.js';
@@ -347,8 +347,9 @@ export function updateCacheStats() {
 }
 let _lastAppliedTheme = null;
 export function applyTheme(theme, notify = false) {
-    document.body.setAttribute('data-cat-theme', theme); const emoji = theme === 'tiger' ? '🐯' : '🐱';
+    document.body.setAttribute('data-cat-theme', theme); const emoji = theme === 'tiger' ? '🐯' : '🐱'; const editEmoji = theme === 'tiger' ? '🍖' : '🐟';
     $('.cat-theme-emoji').text(emoji); $('.cat-mes-trans-btn .cat-emoji-icon').text(emoji); $('#cat-input-btn .cat-emoji-icon').text(emoji);
+    $('.cat-mes-edit-btn .cat-emoji-icon').text(editEmoji);
     if (notify) {
         if (theme === 'tiger') catNotify('🐯 어흥! 호랑이 모드 활성화!', 'success'); else catNotify('🐱 야옹~ 고양이 모드 활성화!', 'success');
     }
@@ -405,11 +406,31 @@ export function injectInputButtons(settings, stContext, processMessageFn) {
 }
 
 export function injectMessageButtons(processMessageFn, revertMessageFn) {
+    const ctx = SillyTavern?.getContext?.();
     $('.mes:not(:has(.cat-btn-group))').each(function () {
-        const msgId = $(this).attr('mesid'); if (!msgId) return; const emoji = getThemeEmoji();
-        const group = $(`<div class="cat-btn-group"><span class="cat-mes-trans-btn interactable" title="번역" data-mesid="${msgId}"><span class="cat-emoji-icon">${emoji}</span></span><span class="cat-mes-revert-btn interactable" title="복구" data-mesid="${msgId}"><i class="fa-solid fa-rotate-left"></i></span></div>`);
+        const msgId = $(this).attr('mesid'); if (!msgId) return;
+        const emoji = getThemeEmoji();
+        const editEmoji = getCompletionEmoji();
+        // 🚨 번역 데이터 유무에 따라 편집 버튼 표시 결정
+        const msg = ctx?.chat?.[parseInt(msgId)];
+        const hasTransData = msg?.extra?.original_mes || msg?.extra?.display_text;
+        const editStyle = hasTransData ? 'opacity:0.8;' : 'opacity:0;pointer-events:none;';
+        const group = $(`<div class="cat-btn-group"><span class="cat-mes-trans-btn interactable" title="번역" data-mesid="${msgId}"><span class="cat-emoji-icon">${emoji}</span></span><span class="cat-mes-revert-btn interactable" title="복구" data-mesid="${msgId}"><i class="fa-solid fa-rotate-left"></i></span><span class="cat-mes-edit-btn interactable" title="편집" data-mesid="${msgId}" style="${editStyle}"><span class="cat-emoji-icon">${editEmoji}</span></span></div>`);
         let target = $(this).find('.name_text'); if (target.length > 0) { target.append(group); } else { let sysWrap = $('<div style="text-align:right; margin-bottom:4px;"></div>'); sysWrap.append(group); $(this).find('.mes_text').first().prepend(sysWrap); }
     });
+    // 🚨 이미 번역된 메시지의 편집 버튼 표시 복원 (인라인 스타일)
+    if (ctx?.chat) {
+        let restoredCount = 0;
+        $('.mes').each(function () {
+            const msgId = parseInt($(this).attr('mesid'));
+            const msg = ctx.chat[msgId];
+            if (msg?.extra?.original_mes || msg?.extra?.display_text) {
+                $(this).find('.cat-mes-edit-btn').css({ opacity: 0.8, 'pointer-events': 'auto' });
+                restoredCount++;
+            }
+        });
+        if (restoredCount > 0) console.log(`[CAT] 🐟 편집 아이콘 복원: ${restoredCount}개 메시지`);
+    }
     // 🚨 메시지 아이콘 숨김 설정 적용
     const vis = $('#ct-icon-visibility').val() || 'all';
     if (vis === 'hide-message') { $('.cat-btn-group').addClass('cat-hidden'); }
@@ -417,7 +438,139 @@ export function injectMessageButtons(processMessageFn, revertMessageFn) {
         window._catMesBtnDelegated = true;
         $(document).on('click', '.cat-mes-trans-btn', function (e) { e.stopPropagation(); const msgId = $(this).data('mesid') || $(this).closest('.mes').attr('mesid'); const isUser = $(this).closest('.mes').hasClass('mes_user'); if (msgId !== undefined) processMessageFn(msgId, isUser); });
         $(document).on('click', '.cat-mes-revert-btn', function (e) { e.stopPropagation(); const msgId = $(this).data('mesid') || $(this).closest('.mes').attr('mesid'); if (msgId !== undefined) revertMessageFn(msgId); });
+        // 🚨 편집 팝업: 🐟/🍖 클릭 → 원문/번역문 편집 선택
+        $(document).on('click', '.cat-mes-edit-btn', function (e) {
+            e.stopPropagation();
+            const msgId = parseInt($(this).data('mesid') || $(this).closest('.mes').attr('mesid'));
+            const mesBlock = $(`.mes[mesid="${msgId}"]`);
+            const ctx = SillyTavern?.getContext?.();
+            const msg = ctx?.chat?.[msgId];
+            if (!msg?.extra?.original_mes) {
+                catNotify(`${getThemeEmoji()} 번역 데이터가 없어요.`, "warning");
+                return;
+            }
+            showEditPopup(mesBlock, msg, msgId);
+        });
     }
+}
+
+// 🚨 편집 팝업: 원문/번역문 선택 후 ST 편집 모드 진입
+function showEditPopup(mesBlock, msg, msgId) {
+    $('.cat-edit-popup').remove();
+    $(document).off('click.catEditClose touchstart.catEditClose');
+
+    const popup = $(`<div class="cat-edit-popup">
+        <div class="cat-edit-option" data-type="original">✏️ 원문 편집</div>
+        <div class="cat-edit-option" data-type="translated">🪶 번역문 편집</div>
+    </div>`);
+
+    const btn = mesBlock.find('.cat-mes-edit-btn')[0];
+    if (!btn) return;
+    $('body').append(popup);
+    const rect = btn.getBoundingClientRect();
+
+    // 🚨 화면 밖 방지 + 위/아래 자동 배치
+    const popupWidth = 180;
+    let leftPos = Math.max(8, rect.left - 20);
+    if (leftPos + popupWidth > window.innerWidth - 8) leftPos = window.innerWidth - popupWidth - 8;
+
+    const spaceBelow = window.innerHeight - rect.bottom;
+    if (spaceBelow > 120) {
+        popup.css({ position: 'fixed', top: (rect.bottom + 4) + 'px', left: leftPos + 'px', zIndex: 2147483647 });
+    } else {
+        popup.css({ position: 'fixed', bottom: (window.innerHeight - rect.top + 4) + 'px', left: leftPos + 'px', zIndex: 2147483647 });
+    }
+
+    // 터치 중복 방지
+    let _editJustOpened = true;
+    setTimeout(() => { _editJustOpened = false; }, 300);
+    popup.on('touchstart click', (e) => { e.stopPropagation(); });
+
+    popup.find('.cat-edit-option').on('click touchend', function (e) {
+        e.preventDefault(); e.stopPropagation();
+        const type = $(this).data('type');
+        popup.remove();
+        $(document).off('click.catEditClose touchstart.catEditClose');
+
+        // 🚨 ST 편집 모드 진입: 메시지의 연필 버튼 클릭
+        const stEditBtn = mesBlock.find('.mes_edit');
+        if (stEditBtn.length) stEditBtn.trigger('click');
+
+        // 🚨 textarea 나타난 후 원문/번역문 삽입
+        setTimeout(() => {
+            const editArea = mesBlock.find('textarea.edit_textarea:visible, textarea.mes_edit_textarea:visible').first();
+            if (!editArea.length) return;
+
+            // 🚨 편집 모드 마킹: watcher에서 분기 처리용
+            mesBlock.data('cat-edit-type', type);
+            const savedOriginal = msg.extra.original_mes;
+            const savedDisplay = msg.extra.display_text;
+
+            if (type === 'original') {
+                setTextareaValue(editArea[0], savedOriginal);
+                catNotify(`${getThemeEmoji()} 원문 편집 모드`, "success");
+            } else {
+                setTextareaValue(editArea[0], savedDisplay || msg.mes);
+                catNotify(`${getThemeEmoji()} 번역문 편집 모드`, "success");
+            }
+
+            // 🚨 편집 닫힘 감지
+            const _editWatcher = setInterval(() => {
+                const stillEditing = mesBlock.find('textarea.edit_textarea:visible, textarea.mes_edit_textarea:visible').length > 0;
+                if (!stillEditing) {
+                    clearInterval(_editWatcher);
+                    const editType = mesBlock.data('cat-edit-type');
+                    // 🚨 MutationObserver 재트리거 방지: 모든 편집 마커 한번에 정리
+                    mesBlock.removeData('cat-edit-type').removeData('cat-edit-active').removeData('cat-edit-display').removeData('cat-edit-original');
+                    const ctx = SillyTavern?.getContext?.();
+                    const freshMsg = ctx?.chat?.[msgId];
+                    if (!freshMsg) return;
+
+                    if (editType === 'translated') {
+                        const currentMes = freshMsg.mes;
+                        if (currentMes !== savedOriginal) {
+                            if (!freshMsg.extra) freshMsg.extra = {};
+                            freshMsg.extra.display_text = currentMes;
+                            freshMsg.extra.original_mes = savedOriginal;
+                            freshMsg.mes = savedOriginal;
+                            console.log(`[CAT] 🐟 번역문 편집 저장 → display_text 갱신, 원문 보존 #${msgId}`);
+                        } else {
+                            if (freshMsg.extra) {
+                                freshMsg.extra.display_text = savedDisplay;
+                                freshMsg.extra.original_mes = savedOriginal;
+                            }
+                            console.log(`[CAT] 🐟 번역문 편집 취소 → 기존 번역문 재적용 #${msgId}`);
+                        }
+                        mesBlock.attr('data-cat-translated', 'true');
+                        ctx.updateMessageBlock(msgId, freshMsg);
+                    } else if (editType === 'original') {
+                        const currentMes = freshMsg.mes;
+                        if (currentMes !== savedOriginal && freshMsg.extra) {
+                            freshMsg.extra.original_mes = currentMes;
+                            console.log(`[CAT] ✏️ 원문 편집 저장 → original_mes 갱신 #${msgId}`);
+                        }
+                        // 🚨 원문 편집 종료 (저장/취소 무관) → 번역문 재표시
+                        if (!freshMsg.extra) freshMsg.extra = {};
+                        freshMsg.extra.display_text = freshMsg.extra.display_text || savedDisplay;
+                        freshMsg.extra.original_mes = freshMsg.extra.original_mes || savedOriginal;
+                        mesBlock.attr('data-cat-translated', 'true');
+                        ctx.updateMessageBlock(msgId, freshMsg);
+                        console.log(`[CAT] ✏️ 편집 종료 → 번역문 재표시 #${msgId}`);
+                    }
+                }
+            }, 300);
+        }, 350);
+    });
+
+    setTimeout(() => {
+        $(document).on('click.catEditClose touchstart.catEditClose', (e) => {
+            if (_editJustOpened) return;
+            if (!$(e.target).closest('.cat-edit-popup, .cat-mes-edit-btn').length) {
+                popup.remove();
+                $(document).off('click.catEditClose touchstart.catEditClose');
+            }
+        });
+    }, 300);
 }
 
 function showBulkPopup(event, settings, stContext, processMessageFn) {
@@ -427,7 +580,7 @@ function showBulkPopup(event, settings, stContext, processMessageFn) {
     const popup = $(`<div class="cat-bulk-popup">
         <div class="cat-bulk-option" data-count="all">📋 전체 번역</div>
         <div class="cat-bulk-option" data-count="20">🦁 최근 20개</div>
-        <div class="cat-bulk-option" data-count="15">🐱 최근 15개</div>
+        <div class="cat-bulk-option" data-count="15">🐯 최근 15개</div>
         <div class="cat-bulk-option" data-count="10">🐱 최근 10개</div>
         <div class="cat-bulk-option" data-count="5">🐭 최근 5개</div>
         <div class="cat-bulk-option" data-count="custom">✏️ 직접 입력...</div>
@@ -644,12 +797,18 @@ export function setupMutationObserver(processMessageFn, revertMessageFn, setting
                 mesBlock.data('cat-edit-active', true);
                 if (msg.extra?.display_text) mesBlock.data('cat-edit-display', msg.extra.display_text);
                 if (msg.extra?.original_mes) mesBlock.data('cat-edit-original', msg.extra.original_mes);
-                if (editArea.val() === msg.mes && msg.extra?.display_text && msg.mes !== msg.extra.display_text) {
-                    setTextareaValue(editArea[0], msg.extra.display_text);
+                // 🚨 🐟 팝업에서 진입한 경우 → 이미 원문/번역문 선택 완료, 건드리지 않음
+                // 🚨 ST 연필로 직접 진입한 경우 → 번역문(한국어) 표시
+                if (!mesBlock.data('cat-edit-type') && msg.extra?.display_text) {
+                    setTimeout(() => setTextareaValue(editArea[0], msg.extra.display_text), 50);
                 }
             } else if (editArea.length === 0 && mesBlock.data('cat-edit-active')) {
                 // 편집 모드 종료
                 mesBlock.removeData('cat-edit-active');
+                
+                // 🚨 🐟/🍖 편집 팝업에서 진입한 편집은 _editWatcher가 처리 → 여기서 스킵
+                if (mesBlock.data('cat-edit-type')) return;
+                
                 const savedDisplay = mesBlock.data('cat-edit-display');
                 const savedOriginal = mesBlock.data('cat-edit-original');
                 mesBlock.removeData('cat-edit-display').removeData('cat-edit-original');
@@ -662,12 +821,20 @@ export function setupMutationObserver(processMessageFn, revertMessageFn, setting
                         msg.extra.original_mes = savedOriginal;
                         msg.extra.display_text = savedDisplay;
                         mesBlock.attr('data-cat-translated', 'true');
-                    } else if (msg.mes !== savedOriginal && msg.mes !== savedDisplay) {
-                        // 사용자가 새 텍스트로 수정 → 번역 데이터 초기화
-                        delete msg.extra?.original_mes;
-                        delete msg.extra?.display_text;
-                        delete msg.extra?.cat_swipe_id;
-                        mesBlock.removeAttr('data-cat-translated');
+                    } else if (msg.mes === savedOriginal) {
+                        // 🚨 취소/되돌리기 후 편집 닫기 → display_text 재적용
+                        if (!msg.extra) msg.extra = {};
+                        msg.extra.original_mes = savedOriginal;
+                        msg.extra.display_text = savedDisplay;
+                        mesBlock.attr('data-cat-translated', 'true');
+                    } else {
+                        // 🚨 번역문 수정 후 저장 → display_text 갱신, 원문 보존
+                        if (!msg.extra) msg.extra = {};
+                        msg.extra.display_text = msg.mes;
+                        msg.extra.original_mes = savedOriginal;
+                        msg.mes = savedOriginal;
+                        mesBlock.attr('data-cat-translated', 'true');
+                        console.log(`[CAT] ✏️ ST 편집 → 번역문 갱신, 원문 보존 #${msgId}`);
                     }
                 }
                 stContext.updateMessageBlock(msgId, msg);

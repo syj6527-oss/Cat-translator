@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Translator v1.0.3 - translator.js
+// 🐱 Translator v1.0.4 - translator.js
 // ============================================================
 import { secret_state, SECRET_KEYS } from '../../../../scripts/secrets.js';
 import { cleanResult, catNotify, detectLanguageDirection, getThemeEmoji, getCompletionEmoji, getCacheModelKey, applyPreReplaceWithCount } from './utils.js';
@@ -282,10 +282,37 @@ Output: ${bl.exNarTgt} "${bl.exSrc} [${bl.exTgt}]" ${bl.exNarTgt}. "${bl.exSrc} 
     return parts.join('\n');
 }
 
+// 🚨 API 에러 한국어 메시지
+const API_ERROR_MESSAGES = {
+    400: '📋 잘못된 요청이에요. 입력을 확인해주세요 (400)',
+    401: '🔑 API 키가 유효하지 않아요 (401)',
+    403: '🚫 API 접근 권한이 없어요 (403)',
+    404: '🔍 API를 찾을 수 없어요. 모델명을 확인해주세요 (404)',
+    429: '⏳ 요청이 너무 많아요. 잠시 후 다시 시도해주세요 (429)',
+    500: '💥 서버 오류가 발생했어요. 잠시 후 다시 시도해주세요 (500)',
+    503: '🔧 서버 점검 중이에요. 잠시 후 다시 시도해주세요 (503)'
+};
+
 async function fetchWithRetry(url, body, retries = 3, abortSignal = null, extraHeaders = {}) {
     const delays = [500, 1000, 2000];
     for (let attempt = 0; attempt <= retries; attempt++) {
-        try { const fetchOptions = { method: 'POST', headers: { 'Content-Type': 'application/json', ...extraHeaders }, body: JSON.stringify(body) }; if (abortSignal) fetchOptions.signal = abortSignal; const res = await fetch(url, fetchOptions); if (res.status === 429) { if (attempt < retries) { await sleep(delays[attempt] || 2000); continue; } throw new Error('429 Too Many Requests'); } if (!res.ok) { throw new Error(`API 오류 (${res.status})`); } return await res.json(); } catch (e) { if (e.name === 'AbortError') throw e; if (attempt >= retries) throw e; await sleep(delays[attempt] || 2000); }
+        try {
+            const fetchOptions = { method: 'POST', headers: { 'Content-Type': 'application/json', ...extraHeaders }, body: JSON.stringify(body) };
+            if (abortSignal) fetchOptions.signal = abortSignal;
+            const res = await fetch(url, fetchOptions);
+            if (res.status === 429) {
+                if (attempt < retries) { await sleep(delays[attempt] || 2000); continue; }
+                throw new Error(API_ERROR_MESSAGES[429]);
+            }
+            if (!res.ok) {
+                throw new Error(API_ERROR_MESSAGES[res.status] || `❌ 알 수 없는 오류 (${res.status})`);
+            }
+            return await res.json();
+        } catch (e) {
+            if (e.name === 'AbortError') throw e;
+            if (attempt >= retries) throw e;
+            await sleep(delays[attempt] || 2000);
+        }
     }
 }
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }

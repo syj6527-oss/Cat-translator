@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Translator v1.0.3
+// 🐱 Translator v1.0.4
 // ============================================================
 import { extension_settings, getContext } from '../../../../scripts/extensions.js';
 import { catNotify, getThemeEmoji, getCompletionEmoji, setTextareaValue, getModelTheme, detectLanguageDirection, getCacheModelKey } from './utils.js';
@@ -169,6 +169,8 @@ async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTran
         if (isInput) { msg.mes = result.text; }
         
         $(`.mes[mesid="${msgId}"]`).attr('data-cat-translated', 'true');
+        // 🚨 편집 버튼 표시 (번역 완료 → 🐟/🍖 활성화)
+        $(`.mes[mesid="${msgId}"]`).find('.cat-mes-edit-btn').css({ opacity: 0.8, 'pointer-events': 'auto' });
 
         stContext.updateMessageBlock(msgId, msg);
         if (!silent) {
@@ -176,7 +178,7 @@ async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTran
             catNotify(`${getCompletionEmoji()} 번역 완료! '${preview}'`, "success");
         }
     } else if (!silent && result === null) {
-        catNotify(`${getThemeEmoji()} 번역 실패. 연필 아이콘으로 수정 모드에서 시도해보세요.`, "warning");
+        catNotify(`${getThemeEmoji()} 번역 결과를 받지 못했어요.`, "warning");
     }
 }
 
@@ -327,6 +329,6 @@ jQuery(async () => {
             setSuppressAutoSave(false);
         }, 500);
     });
-    console.log('[CAT] 🐱 Translator v1.0.3 로드 완료!');
+    console.log('[CAT] 🐱 Translator v1.0.4 로드 완료!');
 });
 
