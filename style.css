@@ -63,7 +63,7 @@
 .cat-mes-edit-btn:hover { opacity: 1 !important; transform: scale(1.15); }
 
 /* 🚨 마스터 튜닝: 하단 버튼 간격(margin) 추가 및 inline-flex 적용으로 아이콘 겹침 완전 방지 */
-.cat-input-icon { cursor: pointer; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 28px; padding: 0 !important; margin: 0 !important; flex-shrink: 0; border: none !important; outline: none !important; box-shadow: none !important; -webkit-tap-highlight-color: transparent; box-sizing: border-box; background: transparent !important; }
+.cat-input-icon { cursor: pointer; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 28px; padding: 0 !important; margin: 0 !important; flex-shrink: 0; border: none !important; outline: none !important; box-shadow: none !important; -webkit-tap-highlight-color: transparent; box-sizing: border-box; background: transparent !important; }
 .cat-input-icon:active { opacity: 0.6; }
 .cat-input-icon i { color: var(--ca-accent); font-size: 0.9em; }
 .cat-input-icon .cat-emoji-icon { font-size: 1.1em; pointer-events: none; }
@@ -100,7 +100,7 @@
     .cat-notification { font-size: 12px; padding: 8px 16px; max-width: 90vw; }
     .cat-bulk-popup, .cat-history-popup, .cat-drag-popup { max-width: calc(100vw - 32px); }
     #cat-drawer-content [style*="display:flex"] { flex-wrap: nowrap !important; }
-    .cat-input-icon { width: 22px; height: 24px; margin: 0 !important; }
+    .cat-input-icon { width: 18px; height: 24px; margin: 0 !important; }
     .cat-input-icon .cat-emoji-icon { font-size: 1em; }
     #send_but { margin-left: 2px !important; }
 }
