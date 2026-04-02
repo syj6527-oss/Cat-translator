@@ -760,11 +760,20 @@ export function setupMutationObserver(processMessageFn, revertMessageFn, setting
                         mesBlock.attr('data-cat-translated', 'true');
                     } else {
                         // 🚨 ST 연필 = 원문(영어) 수정 → original_mes 갱신, 번역문 유지
+                        // 🚨 오염 방지: msg.mes가 한국어면 original_mes 덮어쓰기 차단
+                        const hasKorean = /[가-힣]/.test(msg.mes) && msg.mes.length > 10;
                         if (!msg.extra) msg.extra = {};
-                        msg.extra.original_mes = msg.mes;
+                        if (hasKorean) {
+                            // 한국어가 msg.mes에 들어옴 → 원래 original 보존, 원문 복원
+                            msg.extra.original_mes = savedOriginal;
+                            msg.mes = savedOriginal;
+                            console.log(`[CAT] 🛡️ 오염 방지: 한국어 차단, 원문 보존 #${msgId}`);
+                        } else {
+                            msg.extra.original_mes = msg.mes;
+                            console.log(`[CAT] ✏️ ST 연필 원문 수정 → original_mes 갱신 #${msgId}`);
+                        }
                         msg.extra.display_text = savedDisplay;
                         mesBlock.attr('data-cat-translated', 'true');
-                        console.log(`[CAT] ✏️ ST 연필 원문 수정 → original_mes 갱신 #${msgId}`);
                     }
                 }
                 stContext.updateMessageBlock(msgId, msg);
