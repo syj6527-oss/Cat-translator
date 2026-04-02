@@ -284,6 +284,21 @@ jQuery(async () => {
     // 🚨 캐릭터 전환 시 번역 프롬프트 자동 로드
     stContext.eventSource.on(stContext.event_types.CHAT_CHANGED, () => {
         setTimeout(() => {
+            // 🚨 채팅 로드 시 오염 자동 검사 + 복구 (msg.mes에 한국어가 들어간 경우)
+            const ctx = SillyTavern?.getContext?.();
+            if (ctx?.chat) {
+                let fixedCount = 0;
+                ctx.chat.forEach((msg, i) => {
+                    if (!msg.is_user && msg.extra?.original_mes && /[가-힣]/.test(msg.mes) && msg.mes.length > 10 && msg.mes !== msg.extra.original_mes) {
+                        msg.mes = msg.extra.original_mes;
+                        fixedCount++;
+                    }
+                });
+                if (fixedCount > 0) {
+                    console.warn(`[CAT] 🔧 채팅 로드 시 ${fixedCount}개 메시지 원문 자동 복구`);
+                }
+            }
+
             // 🚨 전환 시점의 최신 캐릭터 이름 사용
             const charName = (SillyTavern?.getContext?.()?.name2) || stContext.name2 || '';
             if (!charName || charName === 'SillyTavern System') return;
@@ -330,5 +345,40 @@ jQuery(async () => {
         }, 500);
     });
     console.log('[CAT] 🐱 Translator v1.0.4 로드 완료!');
+    
+    // 🚨 원문 오염 방어: msg.mes에 한국어가 들어가면 자동 복구
+    // ST 내부 렌더링/저장 과정에서 display_text가 msg.mes로 역류하는 현상 방지
+    function repairContamination(source = '') {
+        const ctx = SillyTavern?.getContext?.();
+        if (!ctx?.chat) return;
+        let repaired = 0;
+        ctx.chat.forEach((msg, i) => {
+            if (!msg.is_user && msg.extra?.original_mes && msg.extra?.display_text) {
+                // msg.mes가 display_text(번역문)와 같거나 한국어가 포함된 경우 → 원문 복원
+                if (msg.mes === msg.extra.display_text && msg.mes !== msg.extra.original_mes) {
+                    msg.mes = msg.extra.original_mes;
+                    repaired++;
+                } else if (/[가-힣]{3,}/.test(msg.mes) && msg.mes !== msg.extra.original_mes && !/[가-힣]/.test(msg.extra.original_mes)) {
+                    // original_mes에 한국어가 없는데 msg.mes에 한국어가 있으면 오염
+                    msg.mes = msg.extra.original_mes;
+                    repaired++;
+                }
+            }
+        });
+        if (repaired > 0) {
+            console.warn(`[CAT] 🛡️ 원문 오염 자동복구: ${repaired}개 (${source})`);
+        }
+    }
+    
+    // 채팅 진입 시 복구
+    stContext.eventSource.on(stContext.event_types.CHAT_CHANGED, () => {
+        setTimeout(() => repairContamination('CHAT_CHANGED'), 1000);
+    });
+    
+    // 10초 간격 상시 감시
+    setInterval(() => repairContamination('watchdog'), 10000);
+    
+    // 최초 로드 시 복구
+    setTimeout(() => repairContamination('init'), 2000);
 });
 
