@@ -367,18 +367,25 @@ jQuery(async () => {
         });
         if (repaired > 0) {
             console.warn(`[CAT] 🛡️ 원문 오염 자동복구: ${repaired}개 (${source})`);
+            // 🚨 복구 결과를 채팅 파일에 영구 저장
+            try { ctx.saveChat(); } catch (e) { /* 저장 실패 무시 */ }
         }
     }
     
-    // 채팅 진입 시 복구
+    // 채팅 진입 시 즉시 복구
     stContext.eventSource.on(stContext.event_types.CHAT_CHANGED, () => {
-        setTimeout(() => repairContamination('CHAT_CHANGED'), 1000);
+        setTimeout(() => repairContamination('CHAT_CHANGED'), 300);
     });
     
-    // 10초 간격 상시 감시
-    setInterval(() => repairContamination('watchdog'), 10000);
+    // 메시지 렌더 시 복구 (AI 응답 생성 전에 오염 제거)
+    stContext.eventSource.on(stContext.event_types.CHARACTER_MESSAGE_RENDERED, () => {
+        repairContamination('MESSAGE_RENDERED');
+    });
+    
+    // 5초 간격 상시 감시
+    setInterval(() => repairContamination('watchdog'), 5000);
     
     // 최초 로드 시 복구
-    setTimeout(() => repairContamination('init'), 2000);
+    setTimeout(() => repairContamination('init'), 1500);
 });
 
