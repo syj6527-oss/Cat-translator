@@ -87,6 +87,8 @@ async function processMessage(id, isInput = false, abortSignal = null, silent = 
 
     if (isAutoEvent && mesBlock.attr('data-cat-translated') === 'true') return;
     if (isAutoEvent && msg.extra?.display_text) return;
+    // 🚨 숨긴 메시지(Hide) 자동 번역 스킵
+    if (isAutoEvent && msg.is_hidden) return;
     // 🚨 display_text 안전장치: 번역된 상태인데 display_text 누락 시 보정
     if (msg.extra?.original_mes && !msg.extra?.display_text) { msg.extra.display_text = msg.mes; }
     // 🚨 Legacy 감지: 구버전에서 msg.mes가 번역문으로 덮어쓰여진 경우 자동 복원
