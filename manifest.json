@@ -1,9 +1,12 @@
 {
-    "name": "cat-translator",
-    "display_name": "🐱 Translator",
-    "version": "1.0.4",
-    "description": "🐱Translator: 맞춤형 튜닝 UI & 스마트 자동번역",
-    "author": "냥헴 & GPT & Claude",
+    "display_name": "🐶 World Tracker",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
     "js": "index.js",
-    "css": "style.css"
+    "css": "style.css",
+    "author": "Yun",
+    "version": "0.3.0-beta",
+    "homePage": "https://github.com/syj6527-oss/RP_World_Tracker",
+    "auto_update": true
 }
