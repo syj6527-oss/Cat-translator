@@ -280,22 +280,25 @@ jQuery(async () => {
     if (!_baselineValid) {
         setTimeout(() => catNotify(`${getThemeEmoji()} 기본 설정을 확인 후 "설정 저장 및 적용" 버튼을 눌러주세요!`, "warning"), 2000);
     }
+    // 🚨 자동 번역: 숨긴 메시지(이미지 등) 스킵을 위해 이중 체크
     stContext.eventSource.on(stContext.event_types.CHARACTER_MESSAGE_RENDERED, (d) => {
         if (settings.autoMode === 'none' || settings.autoMode === 'input') return;
         const msgId = typeof d === 'object' ? d.messageId : d;
+        // 1차 체크 (1.5초): 빠른 스킵
         setTimeout(() => {
             const msg = stContext.chat[parseInt(msgId)];
+            if (msg?.is_hidden) { console.log(`[CAT] ⏭️ 숨긴 메시지 스킵 (1차) #${msgId}`); return; }
             const mesBlock = $(`.mes[mesid="${msgId}"]`);
-            const isHiddenData = msg?.is_hidden;
-            const isHiddenCSS = mesBlock.css('display') === 'none';
-            const isHiddenClass = mesBlock.hasClass('is_hidden');
-            const mesText = msg?.mes?.substring(0, 30) || '';
-            console.log(`[CAT] 🔍 자동번역 체크 #${msgId}: hidden=${isHiddenData}/${isHiddenCSS}/${isHiddenClass} | "${mesText}..."`);
-            if (msg?.is_hidden || isHiddenCSS || isHiddenClass) {
-                console.log(`[CAT] ⏭️ 숨긴 메시지 스킵 #${msgId}`);
-                return;
-            }
-            processMessage(msgId, false, null, false, true);
+            if (mesBlock.css('display') === 'none') { console.log(`[CAT] ⏭️ 숨긴 메시지 스킵 (1차 DOM) #${msgId}`); return; }
+            // 2차 체크 (3초): 확정 후 번역
+            setTimeout(() => {
+                const freshMsg = stContext.chat[parseInt(msgId)];
+                const freshBlock = $(`.mes[mesid="${msgId}"]`);
+                const isHidden = freshMsg?.is_hidden || freshBlock.css('display') === 'none' || freshBlock.hasClass('is_hidden');
+                console.log(`[CAT] 🔍 자동번역 체크 #${msgId}: hidden=${freshMsg?.is_hidden}/${freshBlock.css('display') === 'none'} | "${(freshMsg?.mes || '').substring(0, 30)}..."`);
+                if (isHidden) { console.log(`[CAT] ⏭️ 숨긴 메시지 스킵 (2차) #${msgId}`); return; }
+                processMessage(msgId, false, null, false, true);
+            }, 1500);
         }, 1500);
     });
     stContext.eventSource.on(stContext.event_types.USER_MESSAGE_RENDERED, (d) => { if (settings.autoMode === 'none' || settings.autoMode === 'output') return; const msgId = typeof d === 'object' ? d.messageId : d; setTimeout(() => processMessage(msgId, true, null, false, true), 500); });
