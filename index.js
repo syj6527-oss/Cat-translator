@@ -280,7 +280,24 @@ jQuery(async () => {
     if (!_baselineValid) {
         setTimeout(() => catNotify(`${getThemeEmoji()} 기본 설정을 확인 후 "설정 저장 및 적용" 버튼을 눌러주세요!`, "warning"), 2000);
     }
-    stContext.eventSource.on(stContext.event_types.CHARACTER_MESSAGE_RENDERED, (d) => { if (settings.autoMode === 'none' || settings.autoMode === 'input') return; const msgId = typeof d === 'object' ? d.messageId : d; setTimeout(() => { const msg = stContext.chat[parseInt(msgId)]; if (msg?.is_hidden) return; processMessage(msgId, false, null, false, true); }, 1500); });
+    stContext.eventSource.on(stContext.event_types.CHARACTER_MESSAGE_RENDERED, (d) => {
+        if (settings.autoMode === 'none' || settings.autoMode === 'input') return;
+        const msgId = typeof d === 'object' ? d.messageId : d;
+        setTimeout(() => {
+            const msg = stContext.chat[parseInt(msgId)];
+            const mesBlock = $(`.mes[mesid="${msgId}"]`);
+            const isHiddenData = msg?.is_hidden;
+            const isHiddenCSS = mesBlock.css('display') === 'none';
+            const isHiddenClass = mesBlock.hasClass('is_hidden');
+            const mesText = msg?.mes?.substring(0, 30) || '';
+            console.log(`[CAT] 🔍 자동번역 체크 #${msgId}: hidden=${isHiddenData}/${isHiddenCSS}/${isHiddenClass} | "${mesText}..."`);
+            if (msg?.is_hidden || isHiddenCSS || isHiddenClass) {
+                console.log(`[CAT] ⏭️ 숨긴 메시지 스킵 #${msgId}`);
+                return;
+            }
+            processMessage(msgId, false, null, false, true);
+        }, 1500);
+    });
     stContext.eventSource.on(stContext.event_types.USER_MESSAGE_RENDERED, (d) => { if (settings.autoMode === 'none' || settings.autoMode === 'output') return; const msgId = typeof d === 'object' ? d.messageId : d; setTimeout(() => processMessage(msgId, true, null, false, true), 500); });
     const bodyObserver = new MutationObserver(() => { applyTheme(getCurrentTheme()); }); bodyObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
     // 🚨 캐릭터 전환 시 번역 프롬프트 자동 로드
