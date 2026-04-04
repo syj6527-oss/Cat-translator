@@ -87,8 +87,8 @@ async function processMessage(id, isInput = false, abortSignal = null, silent = 
 
     if (isAutoEvent && mesBlock.attr('data-cat-translated') === 'true') return;
     if (isAutoEvent && msg.extra?.display_text) return;
-    // 🚨 숨긴 메시지(Hide) 자동 번역 스킵 — 데이터 + DOM 이중 체크
-    if (isAutoEvent && (msg.is_hidden || mesBlock.css('display') === 'none' || mesBlock.hasClass('is_hidden'))) return;
+    // 🚨 숨긴 메시지(Hide) + 이미지/시스템 메시지 자동 번역 스킵
+    if (isAutoEvent && (msg.is_hidden || msg.is_system === true || msg.extra?.media?.length > 0 || mesBlock.css('display') === 'none' || mesBlock.hasClass('is_hidden'))) return;
     // 🚨 display_text 안전장치: 번역된 상태인데 display_text 누락 시 보정
     if (msg.extra?.original_mes && !msg.extra?.display_text) { msg.extra.display_text = msg.mes; }
     // 🚨 Legacy 감지: 구버전에서 msg.mes가 번역문으로 덮어쓰여진 경우 자동 복원
@@ -280,26 +280,20 @@ jQuery(async () => {
     if (!_baselineValid) {
         setTimeout(() => catNotify(`${getThemeEmoji()} 기본 설정을 확인 후 "설정 저장 및 적용" 버튼을 눌러주세요!`, "warning"), 2000);
     }
-    // 🚨 자동 번역: 숨긴 메시지(이미지 등) 스킵을 위해 이중 체크
+    // 🚨 자동 번역: 이미지/시스템/숨김 메시지 스킵 (데이터 기반)
     stContext.eventSource.on(stContext.event_types.CHARACTER_MESSAGE_RENDERED, (d) => {
         if (settings.autoMode === 'none' || settings.autoMode === 'input') return;
         const msgId = typeof d === 'object' ? d.messageId : d;
-        // 1차 체크 (1.5초): 빠른 스킵
         setTimeout(() => {
             const msg = stContext.chat[parseInt(msgId)];
-            if (msg?.is_hidden) { console.log(`[CAT] ⏭️ 숨긴 메시지 스킵 (1차) #${msgId}`); return; }
-            const mesBlock = $(`.mes[mesid="${msgId}"]`);
-            if (mesBlock.css('display') === 'none') { console.log(`[CAT] ⏭️ 숨긴 메시지 스킵 (1차 DOM) #${msgId}`); return; }
-            // 2차 체크 (3초): 확정 후 번역
-            setTimeout(() => {
-                const freshMsg = stContext.chat[parseInt(msgId)];
-                const freshBlock = $(`.mes[mesid="${msgId}"]`);
-                const isHidden = freshMsg?.is_hidden || freshBlock.css('display') === 'none' || freshBlock.hasClass('is_hidden');
-                console.log(`[CAT] 🔍 자동번역 체크 #${msgId}: hidden=${freshMsg?.is_hidden}/${freshBlock.css('display') === 'none'} | "${(freshMsg?.mes || '').substring(0, 30)}..."`);
-                if (isHidden) { console.log(`[CAT] ⏭️ 숨긴 메시지 스킵 (2차) #${msgId}`); return; }
-                processMessage(msgId, false, null, false, true);
-            }, 1500);
-        }, 1500);
+            // 🚨 이미지/시스템 메시지 즉시 스킵 (is_hidden 타이밍 무관)
+            if (msg?.is_system === true || msg?.extra?.media?.length > 0) {
+                console.log(`[CAT] ⏭️ 이미지/시스템 메시지 스킵 #${msgId}`);
+                return;
+            }
+            if (msg?.is_hidden) { console.log(`[CAT] ⏭️ 숨긴 메시지 스킵 #${msgId}`); return; }
+            processMessage(msgId, false, null, false, true);
+        }, 500);
     });
     stContext.eventSource.on(stContext.event_types.USER_MESSAGE_RENDERED, (d) => { if (settings.autoMode === 'none' || settings.autoMode === 'output') return; const msgId = typeof d === 'object' ? d.messageId : d; setTimeout(() => processMessage(msgId, true, null, false, true), 500); });
     const bodyObserver = new MutationObserver(() => { applyTheme(getCurrentTheme()); }); bodyObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
