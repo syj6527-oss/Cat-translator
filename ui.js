@@ -59,7 +59,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
                     <label>모델</label>
                     <select id="ct-model" class="text_pole">
                         <optgroup label="🐱 고양이 라인 (Flash)"><option value="gemini-2.0-flash">2.0 Flash</option><option value="gemini-2.5-flash">2.5 Flash</option><option value="gemini-1.5-flash">1.5 Flash</option></optgroup>
-                        <optgroup label="🐯 호랑이 라인 (Pro)"><option value="gemini-2.5-pro">2.5 Pro</option><option value="gemini-1.5-pro">1.5 Pro</option></optgroup>
+                        <optgroup label="🐯 호랑이 라인 (Pro)"><option value="gemini-2.5-pro">2.5 Pro</option><option value="gemini-2.0-pro-exp-02-05">2.0 Pro Exp</option><option value="gemini-1.5-pro">1.5 Pro</option></optgroup>
                         <optgroup label="🐱 Vertex Flash"><option value="vertex-gemini-2.0-flash">Vertex 2.0 Flash</option><option value="vertex-gemini-1.5-flash">Vertex 1.5 Flash</option></optgroup>
                         <optgroup label="🐯 Vertex Pro"><option value="vertex-gemini-2.0-pro">Vertex 2.0 Pro</option><option value="vertex-gemini-1.5-pro">Vertex 1.5 Pro</option></optgroup>
                         <option value="custom">✏️ 직접 입력...</option>

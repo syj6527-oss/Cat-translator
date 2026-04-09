@@ -85,15 +85,15 @@ Example: "She couldn't hold back her tears." → "그녀는 끝내 눈물을 참
 };
 
 const SAFETY_SETTINGS = [
-    { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" },
-    { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_ONLY_HIGH" },
-    { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_ONLY_HIGH" },
-    { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" }
+    { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+    { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+    { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+    { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
 ];
 
 export async function fetchTranslation(text, settings, stContext, options = {}) {
     const isVertexModel = settings.directModel && settings.directModel.startsWith('vertex-');
-    const apiKey = (settings.customKey || secret_state?.[SECRET_KEYS?.MAKERSUITE] || '').trim();
+    const apiKey = settings.customKey || secret_state[SECRET_KEYS.MAKERSUITE];
     const vertexKey = settings.vertexKey || '';
     
     if (!settings.profile && !apiKey && !(isVertexModel && vertexKey)) {
