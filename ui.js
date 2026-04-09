@@ -42,29 +42,17 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
                 <span id="ct-direct-arrow">▶</span> <span>직접 연결 설정 (고급)</span>
             </div>
             <div id="ct-direct-settings" style="display:none;">
-                <div style="font-size:0.8em; opacity:0.6; margin-bottom:8px; padding:6px; border-radius:6px; background:var(--SmartThemeBlurTintColor, rgba(0,0,0,0.1));">💡 연결 프로필 사용을 권장합니다. 직접 연결은 <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--ca-accent);">Google AI Studio</a>에서 발급한 API Key(AIza...)가 필요합니다.</div>                <div class="cat-setting-row" style="position:relative;">
-                    <label>API Key (Gemini)</label>
+                <div style="font-size:0.8em; opacity:0.6; margin-bottom:8px; padding:6px; border-radius:6px; background:var(--SmartThemeBlurTintColor, rgba(0,0,0,0.1));">💡 연결 프로필 사용을 권장합니다. 직접 연결은 <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--ca-accent);">Google AI Studio</a>에서 발급한 API Key(AIza...)가 필요합니다.</div>
+                <div class="cat-setting-row" style="position:relative;">
+                    <label>API Key</label>
                     <input type="password" id="ct-key" class="text_pole" value="${settings.customKey}" style="padding-right:36px;">
                     <span id="ct-key-toggle" class="cat-paw-toggle" title="키 보기/숨기기">🐾</span>
-                </div>
-                <div class="cat-setting-row" style="position:relative;">
-                    <label>API Key (Vertex AI) <span style="font-size:0.8em; opacity:0.6;">선택</span></label>
-                    <input type="password" id="ct-vertex-key" class="text_pole" value="${settings.vertexKey || ''}" style="padding-right:36px;">
-                    <span id="ct-vertex-key-toggle" class="cat-paw-toggle" title="키 보기/숨기기">🐾</span>
-                </div>
-                <div id="ct-vertex-extra" style="display:none;">
-                    <div style="display:flex; gap:8px;">
-                        <div class="cat-setting-row" style="flex:1;"><label>프로젝트 ID</label><input type="text" id="ct-vertex-project" class="text_pole" value="${settings.vertexProject || ''}" placeholder="Vertex 연결 실패 시 입력"></div>
-                        <div class="cat-setting-row" style="width:120px;"><label>리전</label><select id="ct-vertex-region" class="text_pole"><option value="global">global</option><option value="us-central1">us-central1</option><option value="europe-west1">europe-west1</option><option value="asia-northeast1">asia-northeast1</option></select></div>
-                    </div>
                 </div>
                 <div class="cat-setting-row">
                     <label>모델</label>
                     <select id="ct-model" class="text_pole">
                         <optgroup label="🐱 고양이 라인 (Flash)"><option value="gemini-2.5-flash">2.5 Flash</option><option value="gemini-2.0-flash">2.0 Flash</option></optgroup>
                         <optgroup label="🐯 호랑이 라인 (Pro)"><option value="gemini-2.5-pro">2.5 Pro</option><option value="gemini-3.1-pro-preview">3.1 Pro Preview</option></optgroup>
-                        <optgroup label="🐱 Vertex Flash"><option value="vertex-gemini-2.5-flash">Vertex 2.5 Flash</option><option value="vertex-gemini-2.0-flash">Vertex 2.0 Flash</option></optgroup>
-                        <optgroup label="🐯 Vertex Pro"><option value="vertex-gemini-2.5-pro">Vertex 2.5 Pro</option><option value="vertex-gemini-2.0-pro">Vertex 2.0 Pro</option></optgroup>
                         <option value="custom">✏️ 직접 입력...</option>
                     </select>
                     <input type="text" id="ct-model-custom" class="text_pole" placeholder="모델명 직접 입력" style="display:none; margin-top:4px;">
