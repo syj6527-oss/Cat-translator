@@ -38,8 +38,11 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
         </div>
         <div id="cat-drawer-content" class="inline-drawer-content" style="display:none; padding:10px;">
             <div class="cat-setting-row"><label>연결 프로필</label><select id="ct-profile" class="text_pole">${profileOptions}</select></div>
-            <div id="ct-direct-settings" style="display:${settings.profile === '' ? 'block' : 'none'};">
-                <div class="cat-setting-row" style="position:relative;">
+            <div id="ct-direct-toggle" class="cat-setting-row" style="cursor:pointer; opacity:0.7; font-size:0.85em; padding:4px 0;">
+                <span id="ct-direct-arrow">▶</span> <span>직접 연결 설정 (고급)</span>
+            </div>
+            <div id="ct-direct-settings" style="display:none;">
+                <div style="font-size:0.8em; opacity:0.6; margin-bottom:8px; padding:6px; border-radius:6px; background:var(--SmartThemeBlurTintColor, rgba(0,0,0,0.1));">💡 연결 프로필 사용을 권장합니다. 직접 연결은 <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--ca-accent);">Google AI Studio</a>에서 발급한 API Key(AIza...)가 필요합니다.</div>                <div class="cat-setting-row" style="position:relative;">
                     <label>API Key (Gemini)</label>
                     <input type="password" id="ct-key" class="text_pole" value="${settings.customKey}" style="padding-right:36px;">
                     <span id="ct-key-toggle" class="cat-paw-toggle" title="키 보기/숨기기">🐾</span>
@@ -158,9 +161,20 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
         autoSave();
     });
     $('#ct-model-custom').val(settings.customModelName || '').on('input', function () { settings.customModelName = $(this).val(); applyTheme(getModelTheme($(this).val()), true); });
+    // 🚨 직접 연결 토글 버튼
+    $('#ct-direct-toggle').on('click', function () {
+        const ds = $('#ct-direct-settings');
+        const arrow = $('#ct-direct-arrow');
+        if (ds.is(':visible')) {
+            ds.slideUp(200);
+            arrow.text('▶');
+        } else {
+            ds.slideDown(200);
+            arrow.text('▼');
+        }
+    });
     $('#ct-profile').val(settings.profile).on('change', function () {
         settings.profile = $(this).val();
-        $('#ct-direct-settings').toggle(settings.profile === '');
         const pn = $(this).find('option:selected').text().toLowerCase();
         if (pn.includes('pro') || pn.includes('프로') || pn.includes('tiger') || pn.includes('호랑이')) {
             applyTheme('tiger', true);
@@ -305,7 +319,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
         $('#ct-temperature').val(0.3); $('#ct-max-tokens').val(8192); $('#ct-context-range').val(1);
         $('#ct-user-prompt').val(''); $('#ct-dictionary').val(''); $('#ct-dict-reset').text('📭');
         settings.promptPresets = {}; settings.charPresetMap = {}; $('#ct-prompt-preset').val('').find('option:not(:first)').remove();
-        $('#ct-direct-settings').show(); $('#ct-vertex-extra').hide();
+        $('#ct-direct-settings').hide(); $('#ct-direct-arrow').text('▶'); $('#ct-vertex-extra').hide();
         $('#cat-input-btn, #cat-input-revert, #cat-bulk-btn').show(); $('.cat-btn-group').removeClass('cat-hidden');
         saveSettingsFn(true); catNotify(`${getThemeEmoji()} 설정이 초기화되었습니다!`, "success");
     });

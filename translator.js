@@ -248,6 +248,16 @@ This rule OVERRIDES all other translation instructions for quoted dialogue.
 3. Format: "Original dialogue. [${bl.tgtLabel} 번역.]"
 4. Apply this to EVERY quoted dialogue without exception. Do NOT skip any.
 5. Other quote styles (「」, 『』, "") follow the same rule.
+6. CRITICAL PLACEMENT: The [translation] MUST be INSIDE the quotation marks, BEFORE the closing quote.
+
+[CORRECT vs WRONG - READ CAREFULLY]
+✅ CORRECT: "I love you. [널 사랑해.]"
+❌ WRONG:  "I love you."[널 사랑해.]
+❌ WRONG:  "I love you." [널 사랑해.]
+❌ WRONG:  "I love you"[널 사랑해.]
+
+✅ CORRECT: "Go away! [저리 가!]" he shouted.
+❌ WRONG:  "Go away!" [저리 가!] he shouted.
 
 [EXAMPLES]
 Source: ${bl.exNarSrc} "${bl.exSrc}"
