@@ -104,14 +104,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
                 <input type="file" id="ct-import-file" accept=".json" style="display:none;">
             </div>
             <button id="cat-save-btn" class="menu_button cat-save-button" style="margin-top:10px; width:100%;">설정 저장 및 적용 <span class="cat-theme-emoji">🐱</span></button>
-            <div id="ct-debug-toggle" class="cat-setting-row" style="cursor:pointer; opacity:0.7; font-size:0.85em; padding:4px 0; margin-top:8px;">
-                <span id="ct-debug-arrow">▶</span> <span>🔍 디버그 로그</span>
-            </div>
-            <div id="ct-debug-panel" style="display:none;">
-                <div style="font-size:0.75em; opacity:0.5; margin-bottom:4px;">마지막 번역 요청/응답을 확인할 수 있습니다.</div>
-                <button id="ct-debug-refresh" class="menu_button cat-btn-secondary" style="width:100%; margin-bottom:6px;">🔄 새로고침</button>
-                <div id="ct-debug-content" style="font-size:0.8em; max-height:400px; overflow-y:auto; background:var(--SmartThemeBlurTintColor, rgba(0,0,0,0.15)); border-radius:6px; padding:8px; white-space:pre-wrap; word-break:break-all; font-family:monospace;"></div>
-            </div>
+            <button id="ct-debug-btn" class="menu_button cat-btn-secondary" style="margin-top:6px; width:100%;">🐛 마지막 LLM 응답 보기</button>
         </div>
     </div>`;
 
@@ -120,14 +113,8 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
     $('#cat-drawer-header').on('click', (e) => { e.stopPropagation(); $('#cat-drawer-content').slideToggle(200); $('#cat-drawer-toggle').toggleClass('fa-circle-chevron-down fa-circle-chevron-up'); });
     $('#ct-key-toggle').on('click', () => { const i = $('#ct-key'); i.attr('type', i.attr('type') === 'password' ? 'text' : 'password'); });
     
-    // 🚨 디버그 패널
-    $('#ct-debug-toggle').on('click', function () {
-        const dp = $('#ct-debug-panel');
-        const arrow = $('#ct-debug-arrow');
-        if (dp.is(':visible')) { dp.slideUp(200); arrow.text('▶'); }
-        else { dp.slideDown(200); arrow.text('▼'); refreshDebugPanel(); }
-    });
-    $('#ct-debug-refresh').on('click', refreshDebugPanel);
+    // 🚨 디버그 팝업
+    $('#ct-debug-btn').on('click', showDebugPopup);
     
     // 🚨 자동 저장 디바운스 시스템
     const autoSave = () => {
@@ -515,27 +502,65 @@ function enterTranslatedEdit(mesBlock, msg, msgId) {
     }, 350);
 }
 
-// 🚨 디버그 패널: 마지막 번역 요청/응답 표시
-function refreshDebugPanel() {
+// 🚨 디버그 팝업: 마지막 번역 요청/응답 표시
+function showDebugPopup() {
+    $('.cat-debug-overlay').remove();
     const log = getLastDebugLog();
-    if (!log || !log.timestamp) {
-        $('#ct-debug-content').html('<span style="opacity:0.5;">아직 번역 기록이 없습니다.</span>');
-        return;
-    }
-    const maxLen = 500;
-    const truncate = (str, len) => str && str.length > len ? str.substring(0, len) + '...(생략)' : (str || '(없음)');
-    
-    let html = '';
-    html += `<b>⏰ 시간:</b> ${log.timestamp}\n`;
-    html += `<b>📡 모드:</b> ${log.mode}\n`;
-    html += `<b>🤖 모델:</b> ${log.model}\n`;
-    html += `<b>─── 프롬프트 ───</b>\n${truncate(log.prompt, maxLen)}\n\n`;
-    html += `<b>─── LLM 원본 응답 ───</b>\n${truncate(log.rawResponse, maxLen)}\n\n`;
-    html += `<b>─── 후처리 결과 ───</b>\n${truncate(log.cleaned, maxLen)}\n\n`;
-    if (log.thought) html += `<b>─── 사고 과정 ───</b>\n${truncate(log.thought, 300)}\n\n`;
-    if (log.error) html += `<b style="color:#ff6b6b;">─── 에러 ───</b>\n<span style="color:#ff6b6b;">${log.error}</span>\n`;
-    
-    $('#ct-debug-content').html(html);
+    const ts = log?.timestamp || '-';
+    const mode = log?.mode || '(없음)';
+    const model = log?.model || '(없음)';
+    const error = log?.error || '(에러 없음)';
+    const prompt = log?.prompt ? (log.prompt.length > 800 ? log.prompt.substring(0, 800) + '...(생략)' : log.prompt) : '(아직 요청 없음)';
+    const raw = log?.rawResponse ? (log.rawResponse.length > 800 ? log.rawResponse.substring(0, 800) + '...(생략)' : log.rawResponse) : '(아직 LLM 응답 없음)';
+    const cleaned = log?.cleaned ? (log.cleaned.length > 800 ? log.cleaned.substring(0, 800) + '...(생략)' : log.cleaned) : '(없음)';
+    const thought = log?.thought ? (log.thought.length > 300 ? log.thought.substring(0, 300) + '...(생략)' : log.thought) : null;
+
+    const overlay = $(`
+    <div class="cat-debug-overlay" style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); z-index:999999; display:flex; align-items:center; justify-content:center; padding:16px;">
+        <div class="cat-debug-modal" style="background:var(--SmartThemeBodyColor, #222); color:var(--SmartThemeEmColor, #fff); border-radius:12px; max-width:600px; width:100%; max-height:85vh; overflow-y:auto; padding:20px; box-shadow:0 8px 32px rgba(0,0,0,0.5);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                <div style="font-size:1.1em; font-weight:bold;">🐛 마지막 LLM 응답 / 에러 로그</div>
+                <span class="cat-debug-close" style="cursor:pointer; font-size:1.5em; opacity:0.6; padding:4px 8px;">✕</span>
+            </div>
+            <div style="background:rgba(255,100,100,0.1); border:1px solid rgba(255,100,100,0.3); border-radius:8px; padding:10px; margin-bottom:10px;">
+                <div style="font-weight:bold; margin-bottom:4px;">📌 에러 정보</div>
+                <div style="font-size:0.85em; opacity:0.8;">시각: ${ts}<br>에러: ${error}</div>
+            </div>
+            <div style="background:rgba(100,180,255,0.1); border:1px solid rgba(100,180,255,0.3); border-radius:8px; padding:10px; margin-bottom:10px;">
+                <div style="font-weight:bold; margin-bottom:4px;">🔑 API 호출 상태</div>
+                <div style="font-size:0.85em; opacity:0.8;">모드: ${mode}<br>모델: ${model}</div>
+            </div>
+            <div style="background:rgba(255,200,50,0.1); border:1px solid rgba(255,200,50,0.3); border-radius:8px; padding:10px; margin-bottom:10px;">
+                <div style="font-weight:bold; margin-bottom:4px;">📤 보낸 프롬프트 (${(log?.prompt || '').length}자)</div>
+                <div style="font-size:0.8em; opacity:0.8; white-space:pre-wrap; word-break:break-all; max-height:200px; overflow-y:auto; font-family:monospace;">${prompt.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+            </div>
+            <div style="background:rgba(100,255,100,0.1); border:1px solid rgba(100,255,100,0.3); border-radius:8px; padding:10px; margin-bottom:10px;">
+                <div style="font-weight:bold; margin-bottom:4px;">📋 Raw LLM 응답 (${(log?.rawResponse || '').length}자)</div>
+                <div style="font-size:0.8em; opacity:0.8; white-space:pre-wrap; word-break:break-all; max-height:200px; overflow-y:auto; font-family:monospace;">${raw.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+            </div>
+            ${thought ? `<div style="background:rgba(200,100,255,0.1); border:1px solid rgba(200,100,255,0.3); border-radius:8px; padding:10px; margin-bottom:10px;">
+                <div style="font-weight:bold; margin-bottom:4px;">🧠 사고 과정</div>
+                <div style="font-size:0.8em; opacity:0.8; white-space:pre-wrap; word-break:break-all; max-height:150px; overflow-y:auto; font-family:monospace;">${thought.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+            </div>` : ''}
+            <div style="background:rgba(100,200,255,0.1); border:1px solid rgba(100,200,255,0.3); border-radius:8px; padding:10px; margin-bottom:10px;">
+                <div style="font-weight:bold; margin-bottom:4px;">✨ 후처리 결과 (${(log?.cleaned || '').length}자)</div>
+                <div style="font-size:0.8em; opacity:0.8; white-space:pre-wrap; word-break:break-all; max-height:200px; overflow-y:auto; font-family:monospace;">${cleaned.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+            </div>
+            <div style="display:flex; gap:8px; margin-bottom:8px;">
+                <button class="cat-debug-copy menu_button" style="flex:1;">📋 복사</button>
+                <button class="cat-debug-close menu_button" style="flex:1;">닫기</button>
+            </div>
+            <div style="text-align:center; font-size:0.8em; opacity:0.5;">💡 이 로그를 복사해서 보여주면 정확한 원인 파악 가능!</div>
+        </div>
+    </div>`);
+
+    $('body').append(overlay);
+    overlay.find('.cat-debug-close').on('click', () => overlay.remove());
+    overlay.on('click', (e) => { if ($(e.target).hasClass('cat-debug-overlay')) overlay.remove(); });
+    overlay.find('.cat-debug-copy').on('click', () => {
+        const copyText = `[🐱 Translator 디버그 로그]\n시각: ${ts}\n모드: ${mode}\n모델: ${model}\n에러: ${error}\n\n--- 프롬프트 ---\n${log?.prompt || '없음'}\n\n--- LLM 응답 ---\n${log?.rawResponse || '없음'}\n\n--- 후처리 결과 ---\n${log?.cleaned || '없음'}${thought ? '\n\n--- 사고 과정 ---\n' + thought : ''}`;
+        navigator.clipboard.writeText(copyText).then(() => catNotify('📋 디버그 로그 복사 완료!', 'success')).catch(() => catNotify('복사 실패 — 수동으로 복사해주세요', 'warning'));
+    });
 }
 
 function showBulkPopup(event, settings, stContext, processMessageFn) {
