@@ -67,16 +67,21 @@ export function cleanResult(text, originalText = null) {
     let cleaned = text.replace(/^(번역|Translation|Output|Input|Result):\s*/gi, "");
     
     // AI가 응답 전체를 코드블록으로 감싼 경우만 벗기기
-    // 단, 내부에 코드블록이 있으면(원본 코드블록) 건드리지 않음
     const wholeCodeBlockMatch = cleaned.match(/^```[a-z]*\n([\s\S]*?)\n```\s*$/i);
     if (wholeCodeBlockMatch) {
         const inner = wholeCodeBlockMatch[1];
-        // 내부에 ``` 가 없으면 = AI가 래핑한 것 → 벗기기
-        // 내부에 ``` 가 있으면 = 원본 코드블록 포함 → 건드리지 않음
         if (!inner.includes('```')) {
             cleaned = inner;
         }
     }
+    
+    // 🚨 한영병기 후처리: "대사"[번역] → "대사 [번역]" (따옴표 안으로 이동)
+    // 패턴1: "text"[한국어] → "text [한국어]"
+    cleaned = cleaned.replace(/"([^"]*?)"\s*\[([^\]]+)\]/g, '"$1 [$2]"');
+    // 패턴2: 「text」[한국어] → 「text [한국어]」
+    cleaned = cleaned.replace(/「([^」]*?)」\s*\[([^\]]+)\]/g, '「$1 [$2]」');
+    // 패턴3: 『text』[한국어] → 『text [한국어]』
+    cleaned = cleaned.replace(/『([^』]*?)』\s*\[([^\]]+)\]/g, '『$1 [$2]』');
     
     // 🚨 AI 생성모드 감지: 번역이 아닌 RP 이어쓰기/시스템 프롬프트 번역 방지
     if (originalText) {
@@ -87,14 +92,17 @@ export function cleanResult(text, originalText = null) {
             console.warn('[CAT] 🚨 AI 생성모드 감지: 시스템 프롬프트 오염. 결과 폐기.');
             return "";
         }
-        // 비율 4배 초과 (시스템 패턴 없어도) → 이어쓰기 의심, 원문 길이 기준 잘라내기
+        // 비율 4배 초과 → 이어쓰기 의심
         if (ratio > 4) {
             console.warn(`[CAT] ⚠️ 번역 결과 비정상 길이 (${ratio.toFixed(1)}배). 원문 기준 잘라냄.`);
             const cutPoint = originalText.length * 3;
             cleaned = cleaned.substring(0, cutPoint);
-            // 문장 중간 잘림 방지: 마지막 온전한 문장까지만
             const lastSentence = cleaned.match(/.*[.!?。！？」』\])\n]/s);
             if (lastSentence) cleaned = lastSentence[0];
+        }
+        // 🚨 번역 잘림 감지: 결과가 원문 대비 너무 짧으면 경고
+        if (ratio < 0.3 && originalText.length > 200) {
+            console.warn(`[CAT] ⚠️ 번역 결과가 짧음 (${(ratio * 100).toFixed(0)}%). 잘렸을 수 있음.`);
         }
     }
     

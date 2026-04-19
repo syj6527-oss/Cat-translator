@@ -91,6 +91,10 @@ const SAFETY_SETTINGS = [
     { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
 ];
 
+// 🚨 디버그 로그: 마지막 요청/응답 저장 (설정창에서 확인 가능)
+let _lastDebugLog = { timestamp: null, mode: '', model: '', prompt: '', rawResponse: '', cleaned: '', error: null, thought: null };
+export function getLastDebugLog() { return _lastDebugLog; }
+
 export async function fetchTranslation(text, settings, stContext, options = {}) {
     const isVertexModel = settings.directModel && settings.directModel.startsWith('vertex-');
     const apiKey = settings.customKey || secret_state[SECRET_KEYS.MAKERSUITE];
@@ -152,12 +156,18 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
 
     try {
         let result = ""; let thought = null;
+        _lastDebugLog = { timestamp: new Date().toLocaleTimeString(), mode: '', model: '', prompt: '', rawResponse: '', cleaned: '', error: null, thought: null };
+        
         if (settings.profile && stContext.ConnectionManagerRequestService) {
             // 🚨 프로필 모드: systemInstruction 미지원 → 유저 메시지에 합침
             console.log('[CAT] 🔌 프로필 모드: SYSTEM_SHIELD → user 메시지 합침');
             const fullPrompt = SYSTEM_SHIELD + '\n' + prompt;
+            _lastDebugLog.mode = '프로필';
+            _lastDebugLog.model = settings.profile.substring(0, 20) + '...';
+            _lastDebugLog.prompt = fullPrompt;
             const response = await stContext.ConnectionManagerRequestService.sendRequest(settings.profile, [{ role: "user", content: fullPrompt }], settings.maxTokens || 8192);
             result = typeof response === 'string' ? response : (response.content || "");
+            _lastDebugLog.rawResponse = result;
         } else {
             // Vertex 모델 분기
             let actualModel = settings.directModel;
@@ -186,6 +196,9 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
             const baseTemp = parseFloat(settings.temperature) || 0.3; const temperature = prevTranslation ? Math.min(baseTemp + 0.3, 1.0) : baseTemp; const maxTokens = parseInt(settings.maxTokens) || 8192;
             
             const fetchBody = { systemInstruction: { parts: [{ text: SYSTEM_SHIELD }] }, contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { temperature, maxOutputTokens: maxTokens }, safetySettings: SAFETY_SETTINGS };
+            _lastDebugLog.mode = '직접 연결';
+            _lastDebugLog.model = actualModel;
+            _lastDebugLog.prompt = prompt;
             console.log(`[CAT] 🧠 Direct 모드: systemInstruction 분리 | 모델: ${actualModel} | temp: ${temperature} | maxTokens: ${maxTokens}`);
             
             // Vertex 프로젝트 방식은 Authorization 헤더 사용
@@ -196,15 +209,32 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
             
             const data = await fetchWithRetry(url, fetchBody, 3, abortSignal, extraHeaders);
             const parts = data.candidates?.[0]?.content?.parts || []; const thoughtPart = parts.find(p => p.thought); thought = thoughtPart?.text || null; const actualPart = parts.find(p => !p.thought) || parts[parts.length - 1]; result = actualPart?.text?.trim() || "";
+            _lastDebugLog.rawResponse = result;
+            _lastDebugLog.thought = thought;
         }
 
         let cleaned = cleanResult(result, text);
-        if (!cleaned || cleaned.trim().length === 0) { catNotify(`${getThemeEmoji()} 번역 결과가 비어있습니다. 원문 유지.`, "warning"); return null; }
+        
+        // 🚨 병기 후처리: "text."[번역] → "text. [번역]" 자동 교정
+        const bilingualMode = settings.dialogueBilingual || 'off';
+        if (bilingualMode !== 'off' && cleaned) {
+            // "text"[번역] → "text [번역]" (따옴표 밖에 있는 [번역]을 안으로 이동)
+            cleaned = cleaned.replace(/"([^"]*?)"\s*\[([^\]]+)\]/g, '"$1 [$2]"');
+            // "text."[번역]" → "text. [번역]" (이미 따옴표 안인데 마침표 직후 붙은 경우)
+            cleaned = cleaned.replace(/\."\s*\[/g, '. [');
+        }
+        
+        _lastDebugLog.cleaned = cleaned;
+        if (!cleaned || cleaned.trim().length === 0) { 
+            _lastDebugLog.error = '번역 결과 비어있음';
+            catNotify(`${getThemeEmoji()} 번역 결과가 비어있습니다. 원문 유지.`, "warning"); return null; 
+        }
         await setCached(text, targetLang, cleaned, thought, getCacheModelKey(settings));
         return { text: cleaned, lang: targetLang, fromCache: false };
     } catch (e) {
         if (e.name === 'AbortError') return null;
         const errMsg = e.message || '알 수 없는 오류';
+        _lastDebugLog.error = errMsg;
         // Vertex 모델 실패 시 프로젝트 ID/리전 입력 안내
         if (isVertexModel && !settings.vertexProject) {
             $('#ct-vertex-extra').slideDown(200);
@@ -221,8 +251,11 @@ function assemblePrompt(text, targetLang, isToEnglish, settings, options = {}) {
     const bilingualMode = settings.dialogueBilingual || 'off';
     
     // 🚨 병기 모드 ON이면 짧은 텍스트도 풀 프롬프트 경로 강제 사용
-    if (bilingualMode === 'off' && text.length < 100 && !prevTranslation && contextMessages.length === 0 && (!settings.dictionary || !settings.dictionary.trim())) {
-        const lang = isToEnglish ? 'English' : targetLang; return `${text}\n\n(Translate the above to ${lang}. Reply with ONLY the translation. Keep all formatting exactly.)`;
+    if (bilingualMode === 'off' && text.length < 100 && !prevTranslation && contextMessages.length === 0 && (!settings.dictionary || !settings.dictionary.trim()) && (!settings.userPrompt || !settings.userPrompt.trim())) {
+        const lang = isToEnglish ? 'English' : targetLang;
+        const preset = STYLE_PRESETS[settings.style] || STYLE_PRESETS.normal;
+        const styleHint = settings.style !== 'normal' ? ` Style: ${preset.prompt.split('\n')[0]}` : '';
+        return `${text}\n\n(Translate the above to ${lang}.${styleHint} Reply with ONLY the translation. Keep all formatting exactly.)`;
     }
     let parts = [];  // 🚨 SYSTEM_SHIELD는 Gemini systemInstruction으로 분리됨
     const preset = STYLE_PRESETS[settings.style] || STYLE_PRESETS.normal; parts.push(`[Style: ${preset.prompt}]`);

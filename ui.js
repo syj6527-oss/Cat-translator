@@ -3,7 +3,7 @@
 // ============================================================
 import { catNotify, catNotifyProgress, getThemeEmoji, getCompletionEmoji, getModelTheme, setTextareaValue } from './utils.js';
 import { getStats, clearAllCache, exportSettings, importSettings, getHistory, togglePin } from './cache.js';
-import { fetchTranslation, gatherContextMessages, SYSTEM_SHIELD, STYLE_PRESETS } from './translator.js';
+import { fetchTranslation, gatherContextMessages, SYSTEM_SHIELD, STYLE_PRESETS, getLastDebugLog } from './translator.js';
 
 let bulkAbortController = null;
 let isTranslatingInput = false;
@@ -104,6 +104,14 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
                 <input type="file" id="ct-import-file" accept=".json" style="display:none;">
             </div>
             <button id="cat-save-btn" class="menu_button cat-save-button" style="margin-top:10px; width:100%;">설정 저장 및 적용 <span class="cat-theme-emoji">🐱</span></button>
+            <div id="ct-debug-toggle" class="cat-setting-row" style="cursor:pointer; opacity:0.7; font-size:0.85em; padding:4px 0; margin-top:8px;">
+                <span id="ct-debug-arrow">▶</span> <span>🔍 디버그 로그</span>
+            </div>
+            <div id="ct-debug-panel" style="display:none;">
+                <div style="font-size:0.75em; opacity:0.5; margin-bottom:4px;">마지막 번역 요청/응답을 확인할 수 있습니다.</div>
+                <button id="ct-debug-refresh" class="menu_button cat-btn-secondary" style="width:100%; margin-bottom:6px;">🔄 새로고침</button>
+                <div id="ct-debug-content" style="font-size:0.8em; max-height:400px; overflow-y:auto; background:var(--SmartThemeBlurTintColor, rgba(0,0,0,0.15)); border-radius:6px; padding:8px; white-space:pre-wrap; word-break:break-all; font-family:monospace;"></div>
+            </div>
         </div>
     </div>`;
 
@@ -111,37 +119,35 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
 
     $('#cat-drawer-header').on('click', (e) => { e.stopPropagation(); $('#cat-drawer-content').slideToggle(200); $('#cat-drawer-toggle').toggleClass('fa-circle-chevron-down fa-circle-chevron-up'); });
     $('#ct-key-toggle').on('click', () => { const i = $('#ct-key'); i.attr('type', i.attr('type') === 'password' ? 'text' : 'password'); });
-    $('#ct-vertex-key-toggle').on('click', () => { const i = $('#ct-vertex-key'); i.attr('type', i.attr('type') === 'password' ? 'text' : 'password'); });
     
-    // Vertex 추가 필드: 이미 프로젝트ID가 저장되어 있을 때만 표시 (실패 시 자동 노출됨)
-    if ((settings.vertexProject || '').trim()) $('#ct-vertex-extra').show();
-    $('#ct-vertex-region').val(settings.vertexRegion || 'global');
+    // 🚨 디버그 패널
+    $('#ct-debug-toggle').on('click', function () {
+        const dp = $('#ct-debug-panel');
+        const arrow = $('#ct-debug-arrow');
+        if (dp.is(':visible')) { dp.slideUp(200); arrow.text('▶'); }
+        else { dp.slideDown(200); arrow.text('▼'); refreshDebugPanel(); }
+    });
+    $('#ct-debug-refresh').on('click', refreshDebugPanel);
     
     // 🚨 자동 저장 디바운스 시스템
     const autoSave = () => {
-        if (_suppressAutoSave) return;  // 🚨 프리셋 로드 중 차단
+        if (_suppressAutoSave) return;
         clearTimeout(_autoSaveTimer);
         _autoSaveTimer = setTimeout(() => {
-            if (_suppressAutoSave) return;  // 🚨 타이머 실행 시점에도 재확인
+            if (_suppressAutoSave) return;
             saveSettingsFn();
             catNotify(`${getCompletionEmoji()} 설정이 자동 저장되었습니다.`, "autosave");
         }, 500);
     };
     
     // 모든 설정 필드에 자동 저장 연결
-    $('#ct-profile, #ct-auto-mode, #ct-bidirectional, #ct-dialogue-bilingual, #ct-lang, #ct-style, #ct-temperature, #ct-max-tokens, #ct-context-range, #ct-vertex-region').on('change', autoSave);
-    $('#ct-key, #ct-vertex-key, #ct-vertex-project, #ct-model-custom, #ct-user-prompt, #ct-dictionary').on('input', autoSave);
+    $('#ct-profile, #ct-auto-mode, #ct-bidirectional, #ct-dialogue-bilingual, #ct-lang, #ct-style, #ct-temperature, #ct-max-tokens, #ct-context-range').on('change', autoSave);
+    $('#ct-key, #ct-model-custom, #ct-user-prompt, #ct-dictionary').on('input', autoSave);
     
     $('#ct-model').val(settings.directModel).on('change', function () {
         const val = $(this).val();
         $('#ct-model-custom').toggle(val === 'custom');
         if (val !== 'custom') {
-            // Vertex 모델이면 Vertex 키 필드 강조
-            if (val.startsWith('vertex-')) {
-                if (!$('#ct-vertex-key').val().trim()) {
-                    catNotify(`⚠️ Vertex 모델 사용 시 Vertex API Key가 필요합니다!`, "warning");
-                }
-            }
             // 🚨 bodyObserver 레이스 컨디션 방지: autoSave 전에 즉시 반영
             settings.directModel = val;
             applyTheme(getModelTheme(val), true);
@@ -301,13 +307,13 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
     $('#ct-clear-cache').on('click', async () => { await clearAllCache(); updateCacheStats(); catNotify(`${getThemeEmoji()} 캐시 전체 삭제 완료! 📂`, "success"); });
     $('#ct-reset-settings').on('click', () => {
         if (!confirm('모든 설정을 초기값으로 되돌리시겠습니까?')) return;
-        $('#ct-profile').val(''); $('#ct-key').val(''); $('#ct-vertex-key').val(''); $('#ct-vertex-project').val('');
-        $('#ct-vertex-region').val('global'); $('#ct-model').val('gemini-2.5-flash'); $('#ct-model-custom').val('').hide();
+        $('#ct-profile').val(''); $('#ct-key').val('');
+        $('#ct-model').val('gemini-2.5-flash'); $('#ct-model-custom').val('').hide();
         $('#ct-auto-mode').val('none'); $('#ct-bidirectional').val('off'); $('#ct-dialogue-bilingual').val('off'); $('#ct-icon-visibility').val('all'); $('#ct-lang').val('Korean'); $('#ct-style').val('normal');
         $('#ct-temperature').val(0.3); $('#ct-max-tokens').val(8192); $('#ct-context-range').val(1);
         $('#ct-user-prompt').val(''); $('#ct-dictionary').val(''); $('#ct-dict-reset').text('📭');
         settings.promptPresets = {}; settings.charPresetMap = {}; $('#ct-prompt-preset').val('').find('option:not(:first)').remove();
-        $('#ct-direct-settings').hide(); $('#ct-direct-arrow').text('▶'); $('#ct-vertex-extra').hide();
+        $('#ct-direct-settings').hide(); $('#ct-direct-arrow').text('▶');
         $('#cat-input-btn, #cat-input-revert, #cat-bulk-btn').show(); $('.cat-btn-group').removeClass('cat-hidden');
         saveSettingsFn(true); catNotify(`${getThemeEmoji()} 설정이 초기화되었습니다!`, "success");
     });
@@ -329,8 +335,8 @@ export function collectSettings() {
     const modelVal = $('#ct-model').val();
     return {
         profile: $('#ct-profile').val() || '', customKey: $('#ct-key').val() || '',
-        vertexKey: $('#ct-vertex-key').val() || '', vertexProject: $('#ct-vertex-project').val() || '',
-        vertexRegion: $('#ct-vertex-region').val() || 'global',
+        vertexKey: _settingsRef?.vertexKey || '', vertexProject: _settingsRef?.vertexProject || '',
+        vertexRegion: _settingsRef?.vertexRegion || 'global',
         directModel: modelVal === 'custom' ? ($('#ct-model-custom').val() || 'gemini-2.5-flash') : (modelVal || 'gemini-2.5-flash'),
         customModelName: $('#ct-model-custom').val() || '', autoMode: $('#ct-auto-mode').val() || 'none',
         bidirectional: $('#ct-bidirectional').val() || 'off', dialogueBilingual: $('#ct-dialogue-bilingual').val() || 'off', iconVisibility: $('#ct-icon-visibility').val() || 'all',
@@ -507,6 +513,29 @@ function enterTranslatedEdit(mesBlock, msg, msgId) {
             }
         }, 300);
     }, 350);
+}
+
+// 🚨 디버그 패널: 마지막 번역 요청/응답 표시
+function refreshDebugPanel() {
+    const log = getLastDebugLog();
+    if (!log || !log.timestamp) {
+        $('#ct-debug-content').html('<span style="opacity:0.5;">아직 번역 기록이 없습니다.</span>');
+        return;
+    }
+    const maxLen = 500;
+    const truncate = (str, len) => str && str.length > len ? str.substring(0, len) + '...(생략)' : (str || '(없음)');
+    
+    let html = '';
+    html += `<b>⏰ 시간:</b> ${log.timestamp}\n`;
+    html += `<b>📡 모드:</b> ${log.mode}\n`;
+    html += `<b>🤖 모델:</b> ${log.model}\n`;
+    html += `<b>─── 프롬프트 ───</b>\n${truncate(log.prompt, maxLen)}\n\n`;
+    html += `<b>─── LLM 원본 응답 ───</b>\n${truncate(log.rawResponse, maxLen)}\n\n`;
+    html += `<b>─── 후처리 결과 ───</b>\n${truncate(log.cleaned, maxLen)}\n\n`;
+    if (log.thought) html += `<b>─── 사고 과정 ───</b>\n${truncate(log.thought, 300)}\n\n`;
+    if (log.error) html += `<b style="color:#ff6b6b;">─── 에러 ───</b>\n<span style="color:#ff6b6b;">${log.error}</span>\n`;
+    
+    $('#ct-debug-content').html(html);
 }
 
 function showBulkPopup(event, settings, stContext, processMessageFn) {
