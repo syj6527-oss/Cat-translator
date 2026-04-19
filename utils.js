@@ -182,7 +182,10 @@ export function applyPreReplaceWithCount(text, dictionary, isToEnglish) {
             const searchStr = isToEnglish ? trans : orig; const replaceStr = isToEnglish ? orig : trans;
             if (searchStr && replaceStr) {
                 const escaped = searchStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const regex = new RegExp(escaped, 'gi'); const matches = result.match(regex);
+                // 🚨 영문 단어는 word boundary 적용 (bro가 broken 안에서 매칭되는 것 방지)
+                const isLatinWord = /^[a-zA-Z]/.test(searchStr) && /[a-zA-Z]$/.test(searchStr);
+                const pattern = isLatinWord ? `\\b${escaped}\\b` : escaped;
+                const regex = new RegExp(pattern, 'gi'); const matches = result.match(regex);
                 if (matches) { matchCount += matches.length; result = result.replace(regex, replaceStr); }
             }
         }
