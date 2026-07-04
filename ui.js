@@ -1,7 +1,7 @@
 // ============================================================
 // 🐱 Translator v1.0.4 - ui.js
 // ============================================================
-import { catNotify, catNotifyProgress, getThemeEmoji, getCompletionEmoji, getModelTheme, setTextareaValue } from './utils.js';
+import { catNotify, catNotifyProgress, getThemeEmoji, getCompletionEmoji, getModelTheme, setTextareaValue, stripMetaForDetection } from './utils.js';
 import { getStats, clearAllCache, exportSettings, importSettings, getHistory, togglePin } from './cache.js';
 import { fetchTranslation, gatherContextMessages, SYSTEM_SHIELD, STYLE_PRESETS, getLastDebugLog } from './translator.js';
 
@@ -10,6 +10,16 @@ let isTranslatingInput = false;
 let _settingsRef = null;  // 🚨 collectSettings에서 promptPresets/charPresetMap 접근용
 let _suppressAutoSave = false;  // 🚨 프리셋 로드 중 autoSave/스타일핸들러 차단
 let _autoSaveTimer = null;  // 🚨 모듈 스코프로 이동 (CHAT_CHANGED에서 접근 필요)
+
+// 🚨 인풋 유실 방어: 번역 덮어쓰기 직전 입력을 항상 백업 (최근 10개)
+const _catInputHistory = [];
+function pushInputHistory(text) {
+    if (!text || !text.trim()) return;
+    if (_catInputHistory[_catInputHistory.length - 1] === text) return;
+    _catInputHistory.push(text);
+    if (_catInputHistory.length > 10) _catInputHistory.shift();
+    console.log(`[CAT] 💾 인풋 히스토리 백업 (${_catInputHistory.length}개): ${text.substring(0, 40)}...`);
+}
 
 /** 프리셋 로드 시 autoSave 레이스 컨디션 방지용 */
 export function setSuppressAutoSave(val) { _suppressAutoSave = val; }
@@ -489,13 +499,32 @@ export function injectInputButtons(settings, stContext, processMessageFn) {
 
     transBtn.on('click', async (e) => {
         e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-        const sendArea = $('#send_textarea'); const currentText = sendArea.val().trim();
+        const sendArea = $('#send_textarea');
+        
+        // 🚨 모바일 IME 조합 커밋: 입력 중이면 blur로 조합 확정 후 읽기
+        // (삼성 한글 IME 조합 중 val()이 이전 값을 반환 → 새 인풋 유실 방지)
+        if (document.activeElement === sendArea[0]) {
+            sendArea[0].blur();
+            await new Promise(r => setTimeout(r, 80));
+        }
+        
+        const currentText = sendArea.val().trim();
         if (isTranslatingInput || !currentText) return;
         isTranslatingInput = true; transBtn.find('.cat-emoji-icon').addClass('cat-glow-anim');
         try {
             const lastTranslated = sendArea.data('cat-last-translated'); const originalText = sendArea.data('cat-original-text'); const lastTargetLang = sendArea.data('cat-last-target-lang');
             const isRetry = (lastTranslated && currentText === lastTranslated);
-            const textToTranslate = isRetry ? originalText : currentText; const forceLang = null; const prevTrans = isRetry ? currentText : null;
+            
+            // 🚨 새 입력 세션 감지 → 이전 세션 stale 데이터 즉시 정리
+            // (전송 후에도 jQuery data가 남아서 되돌리기가 옛날 인풋을 복원하는 문제 방지)
+            if (!isRetry && lastTranslated) {
+                sendArea.removeData('cat-original-text').removeData('cat-last-translated').removeData('cat-last-target-lang');
+            }
+            
+            const textToTranslate = isRetry ? originalText : currentText; let forceLang = null; const prevTrans = isRetry ? currentText : null;
+            
+            // 🚨 덮어쓰기 전 무조건 히스토리 백업 (어떤 경우에도 인풋 복구 가능)
+            pushInputHistory(currentText);
             
             catNotify(isRetry ? `${getThemeEmoji()} 입력창 재번역 중...` : `${getThemeEmoji()} 번역 진행 중...`, "success");
             
@@ -503,16 +532,55 @@ export function injectInputButtons(settings, stContext, processMessageFn) {
             const contextMsgs = gatherContextMessages(lastMsgId + 1, stContext, contextRange);
             const bilingualInputLangMap = { 'ko-en': 'English', 'ko-ja': 'Japanese', 'ko-zh': 'Chinese' };
             const inputTargetLang = (settings.dialogueBilingual && settings.dialogueBilingual !== 'off') ? (bilingualInputLangMap[settings.dialogueBilingual] || settings.targetLang) : settings.targetLang;
+            
+            // 🚨 인풋 방향 안전장치: 양방향+병기 둘 다 꺼진 환경에서
+            // 한국어 인풋이 Korean 타겟으로 가는 것 방지 (한→한 무의미 번역 → AI가 영어 취급하는 혼란)
+            const dirCheck = stripMetaForDetection(textToTranslate);
+            const dcKor = (dirCheck.match(/[가-힣]/g) || []).length;
+            const dcEng = (dirCheck.match(/[a-zA-Z]/g) || []).length;
+            if (dcKor > dcEng && inputTargetLang === 'Korean') {
+                forceLang = 'English';
+                console.log(`[CAT] 🧭 인풋 방향 교정: 한국어 인풋(한${dcKor}/영${dcEng})인데 타겟이 Korean → English로 강제`);
+            }
+            
             const inputSettings = { ...settings, dialogueBilingual: 'off', targetLang: inputTargetLang };
             const result = await fetchTranslation(textToTranslate, inputSettings, stContext, { forceLang, prevTranslation: prevTrans, contextMessages: contextMsgs });
             if (result && result.text && result.text !== currentText) {
+                // 🚨 하이재킹 감지: AI가 번역 대신 RP 이어쓰기를 준 경우 입력창 보호
+                // (3.5 Flash가 컨텍스트에 홀려서 캐릭터 다이얼로그를 생성하는 문제)
+                const inLen = textToTranslate.length; const outLen = result.text.length;
+                const inNewlines = (textToTranslate.match(/\n/g) || []).length;
+                const outNewlines = (result.text.match(/\n/g) || []).length;
+                const hijacked = outLen > Math.max(300, inLen * 4) ||
+                    (outLen > inLen * 2.5 && outNewlines > inNewlines + 3);
+                if (hijacked) {
+                    console.warn(`[CAT] 🛡️ 하이재킹 감지: 입력 ${inLen}자 → 출력 ${outLen}자 (줄바꿈 ${inNewlines}→${outNewlines})`);
+                    catNotify(`🛡️ AI가 번역 대신 롤플 응답을 준 것 같아서 입력창을 보호했어요! 다시 눌러보세요 (반복되면 리저닝 Minimum 확인)`, "warning");
+                    return;
+                }
+                
                 sendArea.data('cat-original-text', textToTranslate); sendArea.data('cat-last-translated', result.text); sendArea.data('cat-last-target-lang', result.lang);
                 setTextareaValue(sendArea[0], result.text);
                 catNotify(`${getCompletionEmoji()} 입력창 번역 완료!`, "success");
             }
         } finally { isTranslatingInput = false; transBtn.find('.cat-emoji-icon').removeClass('cat-glow-anim'); }
     });
-    revertBtn.on('click', (e) => { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); const sendArea = $('#send_textarea'); const originalText = sendArea.data('cat-original-text'); if (originalText) { setTextareaValue(sendArea[0], originalText); sendArea.removeData('cat-original-text').removeData('cat-last-translated'); catNotify(`${getThemeEmoji()} 원문 복구 완료!`, "success"); } });
+    revertBtn.on('click', (e) => {
+        e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+        const sendArea = $('#send_textarea'); const originalText = sendArea.data('cat-original-text');
+        if (originalText) {
+            setTextareaValue(sendArea[0], originalText);
+            sendArea.removeData('cat-original-text').removeData('cat-last-translated');
+            catNotify(`${getThemeEmoji()} 원문 복구 완료!`, "success");
+        } else if (_catInputHistory.length > 0) {
+            // 🚨 원본 데이터 없으면 히스토리에서 복구 (인풋 유실 최후 방어선)
+            const last = _catInputHistory[_catInputHistory.length - 1];
+            setTextareaValue(sendArea[0], last);
+            catNotify(`🕘 백업 히스토리에서 복구했어요! (덮어쓰기 직전 입력)`, "success");
+        } else {
+            catNotify("⚠️ 복구할 원본이 없습니다.", "warning");
+        }
+    });
     bulkBtn.on('click', (e) => { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); showBulkPopup(e, settings, stContext, processMessageFn); });
 }
 

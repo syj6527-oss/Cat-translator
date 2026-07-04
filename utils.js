@@ -327,11 +327,25 @@ export function getModelTheme(modelName) {
     return 'cat';
 }
 
+// 🚨 언어 감지용 메타 토큰 제거: ooc/rp 약어, {{매크로}}, <태그>, URL이
+// 짧은 인풋의 언어 비율을 왜곡하는 것 방지 (감지/경고 판정 공용)
+export function stripMetaForDetection(text) {
+    return text
+        .replace(/\{\{[^}]*\}\}/g, '')                          // {{char}}, {{user}} 등 매크로
+        .replace(/<[^>]{1,30}>/g, '')                           // <user>, <char> 등 태그
+        .replace(/\b(ooc|OOC|rp|RP|ic|IC|btw|ps|PS|ai|AI)\b/g, '') // RP 메타 약어
+        .replace(/https?:\/\/\S+/g, '');                        // URL
+}
+
 export function detectLanguageDirection(text, settings) {
-    const korCount = (text.match(/[가-힣]/g) || []).length;
-    const engCount = (text.match(/[a-zA-Z]/g) || []).length;
-    const jpCount = (text.match(/[\u3040-\u309F\u30A0-\u30FF]/g) || []).length;
-    const cnCount = (text.match(/[\u4E00-\u9FFF]/g) || []).length;
+    // 🚨 언어 감지 전 메타 토큰 제거: ooc/rp/매크로 같은 영문 토큰이
+    // "ooc: rp 중단하고 답변해" 같은 짧은 한국어 인풋의 비율을 왜곡하는 것 방지
+    const stripped = stripMetaForDetection(text);
+    
+    const korCount = (stripped.match(/[가-힣]/g) || []).length;
+    const engCount = (stripped.match(/[a-zA-Z]/g) || []).length;
+    const jpCount = (stripped.match(/[\u3040-\u309F\u30A0-\u30FF]/g) || []).length;
+    const cnCount = (stripped.match(/[\u4E00-\u9FFF]/g) || []).length;
     const total = korCount + engCount + jpCount + cnCount;
 
     if (total === 0) return { isToEnglish: false, targetLang: settings.targetLang };
@@ -348,6 +362,10 @@ export function detectLanguageDirection(text, settings) {
     if (bidir === 'ko-en') {
         if (korRatio >= 0.7) return { isToEnglish: true, targetLang: 'English' };
         if (engRatio >= 0.7) return { isToEnglish: false, targetLang: 'Korean' };
+        // 🚨 혼합 텍스트 (둘 다 0.7 미달): 우세한 쪽을 원문으로 판정
+        // 한글이 영문보다 많으면 한국어 원문 → 영어로, 반대면 영어 원문 → 한국어로
+        if (korCount > 0 && korCount >= engCount) return { isToEnglish: true, targetLang: 'English' };
+        if (engCount > korCount) return { isToEnglish: false, targetLang: 'Korean' };
     }
 
     // 한↔일
