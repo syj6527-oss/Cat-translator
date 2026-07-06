@@ -794,7 +794,11 @@ function setupChatPreviewTranslation() {
         if (korean / text.length > 0.3) return false;
         // 영문이 50% 이상이어야 영문 미리보기
         const english = (text.match(/[a-zA-Z]/g) || []).length;
-        return english / text.length > 0.5;
+        if (english / text.length > 0.5) return true;
+        // 🚨 fallback: yaml/태그/기호가 많아 영문 비율이 희석된 경우 — 한글 대비 상대 비교
+        // (영문 40자 이상 + 한글이 영문의 10% 미만이면 영어 미리보기로 판정)
+        if (english >= 40 && korean < english * 0.1) return true;
+        return false;
     }
     
     // 미리보기 요소들 찾기
@@ -1098,7 +1102,8 @@ function setupChatPreviewTranslation() {
             const previewText = previewEl.textContent?.trim();
             if (!previewText || previewText.length < 30) continue;
             
-            const isEnglish = isEnglishPreview(previewText);
+            // 🚨 원본 판정 실패 시 마크업 정리 후 텍스트로 재판정 (yaml/태그 희석 대응)
+            const isEnglish = isEnglishPreview(previewText) || isEnglishPreview(cleanupPreviewText(previewText));
             
             // 다운로드 버튼 영역 찾기
             const buttonArea = block.querySelector('.flex-container.gap10px:has(.exportRawChatButton), .flex-container.gap10px:has(.PastChat_cross)');
