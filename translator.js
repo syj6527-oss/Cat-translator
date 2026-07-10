@@ -2,7 +2,7 @@
 // 🐱 Translator v1.0.4 - translator.js
 // ============================================================
 import { secret_state, SECRET_KEYS } from '../../../../scripts/secrets.js';
-import { cleanResult, catNotify, detectLanguageDirection, stripMetaForDetection, getThemeEmoji, getCompletionEmoji, getCacheModelKey, applyPreReplaceWithCount, analyzeSpeechPatterns } from './utils.js';
+import { cleanResult, catNotify, detectLanguageDirection, stripMetaForDetection, getThemeEmoji, getCompletionEmoji, getCacheModelKey, applyPreReplaceWithCount, analyzeSpeechPatterns, splitLiteralAppendix } from './utils.js';
 import { getCached, setCached } from './cache.js';
 
 export const SYSTEM_SHIELD = `[ABSOLUTE DIRECTIVE - VIOLATION = FAILURE]
@@ -396,7 +396,12 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
         const cached = await getCached(text, targetLang, modelKey);
         if (cached) {
             if (!silent) catNotify(`${getCompletionEmoji()} 캐시 히트! ~${Math.round(text.length * 0.5)} 토큰 절약`, "success");
-            return { text: cached.translated, lang: targetLang, fromCache: true };
+            // 🚨 캐시엔 자연번역만 저장되므로 직역 없음 (구버전 캐시 마커 잔재 방어 분리 포함)
+            const cachedSplit = splitLiteralAppendix(cached.translated);
+            if (settings.literalBilingual === 'on' && !cachedSplit.literal) {
+                console.log('[CAT] 🔍 캐시 번역엔 직역 없음 — 재번역 시 직역 병기 생성됨');
+            }
+            return { text: cachedSplit.natural, literal: (settings.literalBilingual === 'on') ? cachedSplit.literal : null, lang: targetLang, fromCache: true };
         }
     }
 
@@ -437,7 +442,9 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
             // 3.5 Flash는 reasoning 모델 → thinking이 토큰 다 먹어서 빈 응답 가능 → 재시도 시 토큰 증량
             const MAX_PROFILE_RETRIES = 3;
             let lastProfileErr = null;
-            const baseMaxTokens = settings.maxTokens || 8192;
+            let baseMaxTokens = settings.maxTokens || 8192;
+            // 🚨 직역 병기 ON = 출력 2배 → 초기 토큰 증량 (재시도 2배 정책은 그대로 유지)
+            if (settings.literalBilingual === 'on') baseMaxTokens = Math.min(baseMaxTokens * 2, 32768);
             
             for (let attempt = 0; attempt < MAX_PROFILE_RETRIES; attempt++) {
                 try {
@@ -597,7 +604,9 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
                 url = `https://generativelanguage.googleapis.com/v1beta/${model}:generateContent?key=${activeKey}`;
             }
             
-            const baseTemp = parseFloat(settings.temperature) || 0.3; const temperature = prevTranslation ? Math.min(baseTemp + 0.3, 1.0) : baseTemp; const maxTokens = parseInt(settings.maxTokens) || 8192;
+            const baseTemp = parseFloat(settings.temperature) || 0.3; const temperature = prevTranslation ? Math.min(baseTemp + 0.3, 1.0) : baseTemp; let maxTokens = parseInt(settings.maxTokens) || 8192;
+            // 🚨 직역 병기 ON = 출력이 자연번역+직역 2배 → 토큰 잘림 방지 증량
+            if (settings.literalBilingual === 'on') maxTokens = Math.min(maxTokens * 2, 32768);
             
             // 🚨 Gemini 3.x thinking 모델 대응: thinkingBudget 최소화
             // 3.5/3.0 Flash, 2.5 Pro는 reasoning 모델 → thinking이 토큰 다 먹어서 빈 응답 가능
@@ -717,15 +726,17 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
         }
         
         // 🚨 번역 언어 검증: 한국어 번역인데 한국어가 거의 없음
-        if (targetLang === 'Korean' && cleaned.length > 50) {
-            const koreanChars = (cleaned.match(/[가-힣]/g) || []).length;
-            const koreanRatio = koreanChars / cleaned.length;
+        // 직역 병기 파트엔 원문(영어)이 echo되므로 검증은 자연번역 파트에만 (오탐 방지)
+        const checkText = splitLiteralAppendix(cleaned).natural;
+        if (targetLang === 'Korean' && checkText.length > 50) {
+            const koreanChars = (checkText.match(/[가-힣]/g) || []).length;
+            const koreanRatio = koreanChars / checkText.length;
             if (koreanRatio < 0.15) {
                 console.warn(`[CAT] ⚠️ 한국어 비율 매우 낮음: ${Math.round(koreanRatio * 100)}%`);
                 catNotify(`${getThemeEmoji()} 번역에 한국어가 거의 없어요. AI가 번역 실패한 것 같아요.`, "warning");
             } else if (koreanRatio < 0.5 && koreanRatio >= 0.15) {
                 // 영문이 많이 섞임 - 일부 단어 번역 안 됨
-                const englishWords = (cleaned.match(/\b[a-zA-Z]{4,}\b/g) || []).length;
+                const englishWords = (checkText.match(/\b[a-zA-Z]{4,}\b/g) || []).length;
                 if (englishWords > 5) {
                     // 🔇 화면 알림 제거 (Yun 요청 2026-07-06: 너무 정신없음) — 콘솔/디버그 로그만 유지
                     console.warn(`[CAT] ⚠️ 영단어 ${englishWords}개 섞임 (번역 누락 가능)`);
@@ -735,7 +746,7 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
             // 🚨 지문 말투 섞임 감지 (콘솔 전용 — 화면 알림 없음, 제보 진단용)
             // 대사("...", 「...」, 『...』) 제거 후 지문만 남겨 -다체 vs -요/-습니다체 혼용 검사
             try {
-                const narrationOnly = cleaned
+                const narrationOnly = checkText
                     .replace(/"[^"]*"/g, '')
                     .replace(/「[^」]*」/g, '')
                     .replace(/『[^』]*』/g, '')
@@ -750,7 +761,7 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
             } catch (e) { /* 감지 실패는 무시 */ }
             
             // 🚨 코드펜스(인포블럭) 내부 미번역 감지: 펜스 안이 영어 그대로 남은 경우
-            const fenceBlocks = [...cleaned.matchAll(/```[a-zA-Z]*\n?([\s\S]*?)```/g)];
+            const fenceBlocks = [...checkText.matchAll(/```[a-zA-Z]*\n?([\s\S]*?)```/g)];
             for (const fb of fenceBlocks) {
                 const inner = fb[1] || '';
                 if (inner.length < 40) continue;
@@ -779,8 +790,13 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
             checkFormalityMix(cleaned);
         }
         
-        await setCached(text, targetLang, cleaned, thought, getCacheModelKey(settings));
-        return { text: cleaned, lang: targetLang, fromCache: false };
+        // 🚨 직역 병기: 마커 기준 자연번역/직역 분리. 캐시엔 자연번역만 저장 (히스토리 팝업 마커 노출 방지)
+        const literalSplit = splitLiteralAppendix(cleaned);
+        if (settings.literalBilingual === 'on' && !literalSplit.literal && targetLang === 'Korean') {
+            console.warn('[CAT] 🔍 직역 병기 ON인데 직역 파트 없음 (모델이 마커 미출력 또는 토큰 잘림) — 자연번역만 표시');
+        }
+        await setCached(text, targetLang, literalSplit.natural, thought, getCacheModelKey(settings));
+        return { text: literalSplit.natural, literal: (settings.literalBilingual === 'on') ? literalSplit.literal : null, lang: targetLang, fromCache: false };
     } catch (e) {
         if (e.name === 'AbortError') return null;
         const errMsg = e.message || '알 수 없는 오류';
@@ -812,7 +828,7 @@ function assemblePrompt(text, targetLang, isToEnglish, settings, options = {}) {
     const bilingualMode = settings.dialogueBilingual || 'off';
     
     // 🚨 병기 모드 ON이면 짧은 텍스트도 풀 프롬프트 경로 강제 사용
-    if (bilingualMode === 'off' && text.length < 100 && !prevTranslation && contextMessages.length === 0 && (!settings.dictionary || !settings.dictionary.trim()) && (!settings.userPrompt || !settings.userPrompt.trim())) {
+    if (bilingualMode === 'off' && settings.literalBilingual !== 'on' && text.length < 100 && !prevTranslation && contextMessages.length === 0 && (!settings.dictionary || !settings.dictionary.trim()) && (!settings.userPrompt || !settings.userPrompt.trim())) {
         const lang = isToEnglish ? 'English' : targetLang;
         const preset = STYLE_PRESETS[settings.style] || STYLE_PRESETS.normal;
         const styleHint = settings.style !== 'normal' ? ` Style: ${preset.prompt.split('\n')[0]}` : '';
@@ -825,6 +841,43 @@ function assemblePrompt(text, targetLang, isToEnglish, settings, options = {}) {
     if (bilingualMode !== 'off') { targetLang = 'Korean'; isToEnglish = false; }
     
     if (isToEnglish) { parts.push(`Translate the following into English.`); } else { parts.push(`Translate the following into ${targetLang}.`); }
+    
+    // 🚨 직역 병기 모드: 자연 번역 완료 후 마커 + 문장별 원문↔직역 교차 짝 출력 (한국어 타겟 전용)
+    if (settings.literalBilingual === 'on' && !isToEnglish) {
+        parts.push(`
+[LITERAL APPENDIX MODE - output structure]
+Step 1: Output the complete natural translation as normal (follow all rules above).
+Step 2: Then output this exact marker ALONE on its own line: <<<CAT_LITERAL>>>
+Step 3: Then output the ENTIRE source as ALTERNATING PAIRS, in CHUNKS:
+- Line 1 of each pair: an ORIGINAL chunk exactly as written, prefixed with "» "
+- Line 2: its LITERAL Korean translation as one block (no prefix)
+- One blank line between pairs
+CHUNK DEFINITION (critical - read carefully):
+- A chunk = a paragraph: a block of text separated by BLANK LINES in the source.
+- If the source puts every sentence on its own line WITHOUT blank lines, that is still ONE flowing passage — group 3 to 6 consecutive sentences into a single chunk. Join them with spaces on one line.
+- NEVER output one-sentence pairs unless a real paragraph genuinely contains only one sentence.
+- Do not merge across blank lines, do not skip anything.
+WRONG (one sentence per pair - FAILURE):
+» I tilted my head.
+나는 고개를 갸웃했다.
+
+» If he wants to do it, why not?
+그가 하고 싶다면, 왜 안 되겠는가?
+CORRECT (sentences grouped into one chunk):
+» I tilted my head. If he wants to do it, why not? I smiled soullessly and slowly crossed my arms.
+나는 고개를 갸웃했다. 그가 그것을 하고 싶다면, 왜 안 되겠는가? 나는 영혼 없이 미소 지으며 천천히 팔짱을 꼈다.
+Literal translation rules:
+- Minimize interpretation. Translate what is written, not what is implied.
+- PRONOUNS translate literally and consistently: he→그, she→그녀, it→그것, they→그들. NEVER substitute colloquial forms like 얘/걔/쟤/그놈 — those are interpretations, not translations.
+- Every word must be accounted for: do not drop adverbs, intensifiers, or hedges (almost, just, really, carefully). "I almost fell" = "나는 거의 넘어갈 뻔했다", not "나는 넘어갈 뻔했다".
+- Keep idioms and metaphors as-is rather than localizing them.
+- Keep the source's register: do not make it more casual or more colloquial than written.
+- Korean grammar stays correct and readable — faithful translation, not broken word-swapping.
+- Speech level (반말/존댓말) follows the natural translation's choice, but word choice stays literal.
+WRONG literal: "걔는… 14개월 된 강아지였어." (얘/걔 = interpretation)
+CORRECT literal: "그는… 14개월 된 강아지였어." (그 = literal he, speech level kept)
+The natural translation (Step 1) must NOT contain the marker, the "»" prefix, or any literal translation.`);
+    }
     
     // 🚨 대사 병기 모드 프롬프트 삽입
     if (bilingualMode !== 'off') {

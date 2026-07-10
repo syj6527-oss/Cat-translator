@@ -75,6 +75,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
             <div style="display:flex; gap:8px;">
                 <div class="cat-setting-row" style="flex:1;"><label>목표 언어 (AI 기본)</label><select id="ct-lang" class="text_pole">${langOptions}</select></div>
                 <div class="cat-setting-row" style="flex:1;"><label>대사 병기</label><select id="ct-dialogue-bilingual" class="text_pole"><option value="off">꺼짐</option><option value="ko-en">한영 병기</option><option value="ko-ja">한일 병기</option><option value="ko-zh">한중 병기</option></select></div>
+                <div class="cat-setting-row" style="flex:1;"><label>🔍 직역 병기</label><select id="ct-literal-bilingual" class="text_pole"><option value="off">꺼짐</option><option value="on">켜짐 (접이식)</option></select></div>
             </div>
             <div style="display:flex; gap:8px;">
                 <div class="cat-setting-row" style="flex:1;"><label>스타일</label><select id="ct-style" class="text_pole">${styleOptions}</select></div>
@@ -169,7 +170,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
     };
     
     // 모든 설정 필드에 자동 저장 연결
-    $('#ct-profile, #ct-auto-mode, #ct-bidirectional, #ct-dialogue-bilingual, #ct-lang, #ct-style, #ct-temperature, #ct-max-tokens, #ct-context-range, #ct-retranslate-strength, #ct-after-edit, #ct-preview-cleanup').on('change', autoSave);
+    $('#ct-profile, #ct-auto-mode, #ct-bidirectional, #ct-dialogue-bilingual, #ct-literal-bilingual, #ct-lang, #ct-style, #ct-temperature, #ct-max-tokens, #ct-context-range, #ct-retranslate-strength, #ct-after-edit, #ct-preview-cleanup').on('change', autoSave);
     $('#ct-key, #ct-model-custom, #ct-user-prompt, #ct-dictionary').on('input', autoSave);
     
     $('#ct-model').val(settings.directModel).on('change', function () {
@@ -209,7 +210,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
         }
     });
     $('#ct-style').val(settings.style || 'normal').on('change', function () { if (_suppressAutoSave) return; const preset = STYLE_PRESETS[$(this).val()]; if (preset) $('#ct-temperature').val(preset.temperature); });
-    $('#ct-auto-mode').val(settings.autoMode); $('#ct-bidirectional').val(settings.bidirectional || 'off'); $('#ct-dialogue-bilingual').val(settings.dialogueBilingual || 'off'); $('#ct-lang').val(settings.targetLang); $('#ct-temperature').val(settings.temperature || 0.3);
+    $('#ct-auto-mode').val(settings.autoMode); $('#ct-bidirectional').val(settings.bidirectional || 'off'); $('#ct-dialogue-bilingual').val(settings.dialogueBilingual || 'off'); $('#ct-literal-bilingual').val(settings.literalBilingual || 'off'); $('#ct-lang').val(settings.targetLang); $('#ct-temperature').val(settings.temperature || 0.3);
     
     // 대사 병기 변경 시 알림
     $('#ct-dialogue-bilingual').on('change', function() {
@@ -402,7 +403,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
         if (!confirm('모든 설정을 초기값으로 되돌리시겠습니까?')) return;
         $('#ct-profile').val(''); $('#ct-key').val('');
         $('#ct-model').val('gemini-2.5-flash'); $('#ct-model-custom').val('').hide();
-        $('#ct-auto-mode').val('none'); $('#ct-bidirectional').val('off'); $('#ct-dialogue-bilingual').val('off'); $('#ct-icon-visibility').val('all'); $('#ct-lang').val('Korean'); $('#ct-style').val('normal'); $('#ct-retranslate-strength').val('normal'); $('#ct-after-edit').val('notify'); $('#ct-preview-cleanup').val('off');
+        $('#ct-auto-mode').val('none'); $('#ct-bidirectional').val('off'); $('#ct-dialogue-bilingual').val('off'); $('#ct-literal-bilingual').val('off'); $('#ct-icon-visibility').val('all'); $('#ct-lang').val('Korean'); $('#ct-style').val('normal'); $('#ct-retranslate-strength').val('normal'); $('#ct-after-edit').val('notify'); $('#ct-preview-cleanup').val('off');
         $('#ct-temperature').val(0.3); $('#ct-max-tokens').val(8192); $('#ct-context-range').val(1);
         $('#ct-user-prompt').val(''); $('#ct-dictionary').val(''); $('#ct-dict-reset').text('📭');
         settings.promptPresets = {}; settings.charPresetMap = {}; $('#ct-prompt-preset').val('').find('option:not(:first)').remove();
@@ -448,7 +449,7 @@ export function collectSettings() {
         vertexRegion: _settingsRef?.vertexRegion || 'global',
         directModel: modelVal === 'custom' ? ($('#ct-model-custom').val() || _settingsRef?.directModel || 'gemini-2.5-flash') : (modelVal || _settingsRef?.directModel || 'gemini-2.5-flash'),
         customModelName: $('#ct-model-custom').val() || _settingsRef?.customModelName || '', autoMode: $('#ct-auto-mode').val() || _settingsRef?.autoMode || 'none',
-        bidirectional: $('#ct-bidirectional').val() || _settingsRef?.bidirectional || 'off', dialogueBilingual: $('#ct-dialogue-bilingual').val() || _settingsRef?.dialogueBilingual || 'off', iconVisibility: $('#ct-icon-visibility').val() || _settingsRef?.iconVisibility || 'all',
+        bidirectional: $('#ct-bidirectional').val() || _settingsRef?.bidirectional || 'off', dialogueBilingual: $('#ct-dialogue-bilingual').val() || _settingsRef?.dialogueBilingual || 'off', literalBilingual: $('#ct-literal-bilingual').val() || _settingsRef?.literalBilingual || 'off', iconVisibility: $('#ct-icon-visibility').val() || _settingsRef?.iconVisibility || 'all',
         targetLang: $('#ct-lang').val() || _settingsRef?.targetLang || 'Korean', style: $('#ct-style').val() || _settingsRef?.style || 'normal',
         temperature: parseFloat($('#ct-temperature').val()) || _settingsRef?.temperature || 0.3, maxTokens: parseInt($('#ct-max-tokens').val()) || _settingsRef?.maxTokens || 8192,
         contextRange: Math.min(6, Math.max(0, parseInt($('#ct-context-range').val()) || _settingsRef?.contextRange || 1)),
@@ -543,7 +544,7 @@ export function injectInputButtons(settings, stContext, processMessageFn) {
                 console.log(`[CAT] 🧭 인풋 방향 교정: 한국어 인풋(한${dcKor}/영${dcEng})인데 타겟이 Korean → English로 강제`);
             }
             
-            const inputSettings = { ...settings, dialogueBilingual: 'off', targetLang: inputTargetLang };
+            const inputSettings = { ...settings, dialogueBilingual: 'off', literalBilingual: 'off', targetLang: inputTargetLang };
             const result = await fetchTranslation(textToTranslate, inputSettings, stContext, { forceLang, prevTranslation: prevTrans, contextMessages: contextMsgs });
             if (result && result.text && result.text !== currentText) {
                 // 🚨 하이재킹 감지: AI가 번역 대신 RP 이어쓰기를 준 경우 입력창 보호
@@ -700,8 +701,8 @@ function showDebugPopup() {
     const thought = log?.thought ? (log.thought.length > 300 ? log.thought.substring(0, 300) + '...(생략)' : log.thought) : null;
 
     const overlay = $(`
-    <div class="cat-debug-overlay" style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); z-index:999999; display:flex; align-items:center; justify-content:center; padding:16px;">
-        <div class="cat-debug-modal" style="background:var(--SmartThemeBodyColor, #222); color:var(--SmartThemeEmColor, #fff); border-radius:12px; max-width:600px; width:100%; max-height:85vh; overflow-y:auto; padding:20px; box-shadow:0 8px 32px rgba(0,0,0,0.5);">
+    <div class="cat-debug-overlay" style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); z-index:999999; display:flex; align-items:flex-start; justify-content:center; padding:16px; overflow-y:auto; -webkit-overflow-scrolling:touch;">
+        <div class="cat-debug-modal" style="background:var(--SmartThemeBodyColor, #222); color:var(--SmartThemeEmColor, #fff); border-radius:12px; max-width:600px; width:100%; margin:auto; padding:20px; box-shadow:0 8px 32px rgba(0,0,0,0.5);">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
                 <div style="font-size:1.1em; font-weight:bold;">🐛 마지막 LLM 응답 / 에러 로그</div>
                 <span class="cat-debug-close" style="cursor:pointer; font-size:1.5em; opacity:0.6; padding:4px 8px;">✕</span>

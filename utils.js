@@ -508,3 +508,79 @@ export function analyzeSpeechPatterns(contextMessages) {
     
     return patterns.length > 0 ? patterns.join('\n') : null;
 }
+
+// ============================================================
+// 🔍 직역 병기 (Literal Appendix) 헬퍼
+// ============================================================
+
+// AI 출력에서 자연번역 / 직역 파트 분리
+// 마커가 없으면 { natural: 전체, literal: null } — 우아한 실패
+export function splitLiteralAppendix(text) {
+    if (!text) return { natural: text, literal: null };
+    const markerRe = /\n?\s*<{2,3}\s*CAT_LITERAL\s*>{2,3}\s*\n?/i;
+    const m = text.match(markerRe);
+    if (!m) return { natural: text, literal: null };
+    const idx = m.index;
+    const natural = text.slice(0, idx).trim();
+    const literal = text.slice(idx + m[0].length).trim();
+    // 직역 파트가 비어있으면 (토큰 잘림 등) 자연번역만
+    if (!literal) return { natural, literal: null };
+    // 자연번역 파트에 마커 잔재가 또 있으면 제거 (모델 이중 출력 방어)
+    return { natural: natural.replace(markerRe, '').trim(), literal };
+}
+
+// 직역 텍스트 → 접이식 <details> HTML (ST 네이티브 렌더, 탭 이벤트 JS 불필요)
+// 직역 파트가 "» 원문 / 직역" 교차 짝 형식이면 줄 단위 스타일링으로 번갈아 표시
+// 형식이 아니면(모델이 무시) originalText로 기존 2블럭(원문 통짜+직역 통짜) 폴백
+export function buildLiteralDetailsHtml(literalText, originalText = null) {
+    const escapeHtml = (s) => String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    const lines = String(literalText).split('\n');
+    const hasPairs = lines.some(l => /^»\s?/.test(l.trim()));
+    
+    if (hasPairs) {
+        // 교차 짝 렌더 — 네이티브 태그 구조 (p=짝 간격, em=원문 이탤릭, br=짝 내부 줄바꿈)
+        // ST 새니타이저가 class를 벗기거나 CSS가 캐시돼도 브라우저 기본 스타일로 간격·구분 유지됨
+        const pairs = [];
+        let cur = null;
+        for (const line of lines) {
+            const t = line.trim();
+            if (!t) continue;
+            const m = t.match(/^»\s?(.*)$/);
+            if (m) {
+                if (cur) pairs.push(cur);
+                cur = { orig: m[1], lit: [] };
+            } else if (cur) {
+                cur.lit.push(t);
+            } else {
+                // » 앞에 떠도는 줄 → 자체 짝으로 (원문 없이)
+                pairs.push({ orig: null, lit: [t] });
+            }
+        }
+        if (cur) pairs.push(cur);
+        const body = pairs.map(p => {
+            const litHtml = p.lit.map(escapeHtml).join('<br>');
+            if (p.orig !== null) {
+                return `<p class="cat-literal-pair"><em class="cat-literal-orig">${escapeHtml(p.orig)}</em><br>${litHtml}</p>`;
+            }
+            return `<p class="cat-literal-pair">${litHtml}</p>`;
+        }).join('');
+        return `<details class="cat-literal"><summary>🔍 원문·직역 보기</summary><div class="cat-literal-body">${body}</div></details>`;
+    }
+    
+    // 폴백: 짝 형식 아님 → 원문 통짜 + 직역 통짜 2블럭
+    const litHtml = escapeHtml(literalText).replace(/\n/g, '<br>');
+    if (originalText) {
+        const origHtml = escapeHtml(originalText).replace(/\n/g, '<br>');
+        return `<details class="cat-literal"><summary>🔍 원문·직역 보기</summary><div class="cat-literal-body"><div class="cat-literal-label">📜 원문</div><div class="cat-literal-orig">${origHtml}</div><div class="cat-literal-label">🔍 직역</div><div>${litHtml}</div></div></details>`;
+    }
+    return `<details class="cat-literal"><summary>🔍 직역 보기</summary><div class="cat-literal-body">${litHtml}</div></details>`;
+}
+
+// display_text에서 직역 details 블록 제거 (재번역 prevTranslation 오염 방지용)
+export function stripLiteralDetails(text) {
+    if (!text) return text;
+    return text.replace(/\s*<details class="cat-literal">[\s\S]*?<\/details>\s*/g, '').trim();
+}

@@ -222,3 +222,70 @@ button.cat-edit-history-restore,
         padding: 6px 14px !important;
     }
 }
+
+/* ============================================================
+   🔍 직역 병기 접이식 블록 (네이티브 details — 탭으로 접기/펼치기)
+   ============================================================ */
+.mes_text details.cat-literal {
+    margin-top: 8px;
+    border-radius: 6px;
+}
+.mes_text details.cat-literal summary {
+    cursor: pointer;
+    font-size: 0.82em;
+    opacity: 0.55;
+    user-select: none;
+    -webkit-user-select: none;
+    list-style-position: inside;
+    padding: 2px 0;
+}
+.mes_text details.cat-literal summary:hover { opacity: 0.85; }
+.mes_text details.cat-literal[open] summary { opacity: 0.75; margin-bottom: 4px; }
+.mes_text details.cat-literal .cat-literal-body {
+    font-size: 0.92em;
+    opacity: 0.85;
+    padding: 6px 10px;
+    margin: 0;
+    border-left: 2px solid rgba(150, 150, 150, 0.45);
+    line-height: 1.55;
+}
+
+/* 직역 병기 — 원문/직역 라벨 구조 */
+.mes_text details.cat-literal .cat-literal-label {
+    font-size: 0.78em;
+    font-weight: 600;
+    opacity: 0.55;
+    margin: 6px 0 2px 0;
+    letter-spacing: 0.03em;
+}
+.mes_text details.cat-literal .cat-literal-label:first-child { margin-top: 0; }
+.mes_text details.cat-literal .cat-literal-orig {
+    opacity: 0.75;
+    font-style: italic;
+    margin-bottom: 4px;
+    margin-top: 14px; /* 짝(원문↔직역) 사이 간격 — 모델이 빈 줄 안 넣어도 CSS가 강제 */
+}
+.mes_text details.cat-literal .cat-literal-orig:first-child { margin-top: 2px; }
+
+/* 직역 병기 — 문장별 원문↔직역 교차 표시 */
+.mes_text details.cat-literal .cat-literal-lit { margin-bottom: 2px; }
+.mes_text details.cat-literal .cat-literal-gap { height: 0; } /* 간격은 orig margin-top이 담당 — 중복 방지 */
+
+/* 직역 병기 v3.4 — <p> 짝 구조 보정 (CSS 먹는 환경에선 더 예쁘게, 안 먹어도 p 기본 여백으로 간격 유지) */
+.mes_text details.cat-literal p.cat-literal-pair { margin: 0 0 12px 0; }
+.mes_text details.cat-literal p.cat-literal-pair:last-child { margin-bottom: 2px; }
+
+/* 직역 병기 내부 — 형광펜/대사 스타일 무효화 (본문 형광펜은 유지, 접이식 안에서만 off)
+   ST가 "..." 를 <q>로 감싸고 사용자 커스텀 CSS가 배경을 입히는데,
+   직역 블록 안에서는 배경 덩어리가 짝 간격을 먹어버려 가독성을 해침 */
+.mes_text details.cat-literal q,
+.mes_text details.cat-literal em q {
+    background: none !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    color: inherit !important;
+    border-radius: 0 !important;
+}

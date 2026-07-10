@@ -2,7 +2,7 @@
 // 🐱 Translator v1.0.4
 // ============================================================
 import { extension_settings, getContext } from '../../../../scripts/extensions.js';
-import { catNotify, getThemeEmoji, getCompletionEmoji, setTextareaValue, getModelTheme, detectLanguageDirection, getCacheModelKey } from './utils.js';
+import { catNotify, getThemeEmoji, getCompletionEmoji, setTextareaValue, getModelTheme, detectLanguageDirection, getCacheModelKey, buildLiteralDetailsHtml, stripLiteralDetails } from './utils.js';
 import { initCache, deleteCached } from './cache.js';
 import { fetchTranslation, gatherContextMessages } from './translator.js';
 import { setupSettingsPanel, collectSettings, updateCacheStats, injectMessageButtons, injectInputButtons, setupDragDictionary, setupMutationObserver, showHistoryPopup, applyTheme, setSuppressAutoSave, clearPendingAutoSave } from './ui.js';
@@ -10,7 +10,7 @@ import { setupSettingsPanel, collectSettings, updateCacheStats, injectMessageBut
 const EXT_NAME = "cat-translator";
 const stContext = getContext();
 
-const defaultSettings = { profile: '', customKey: '', vertexKey: '', vertexProject: '', vertexRegion: 'global', directModel: 'gemini-2.5-flash', customModelName: '', autoMode: 'none', bidirectional: 'off', dialogueBilingual: 'off', iconVisibility: 'all', targetLang: 'Korean', style: 'normal', temperature: 0.3, maxTokens: 8192, contextRange: 1, userPrompt: '', dictionary: '', retranslateStrength: 'normal', afterEditMode: 'notify', previewTranslate: 'off', previewCleanup: 'off', promptPresets: {}, charPresetMap: {} };
+const defaultSettings = { profile: '', customKey: '', vertexKey: '', vertexProject: '', vertexRegion: 'global', directModel: 'gemini-2.5-flash', customModelName: '', autoMode: 'none', bidirectional: 'off', dialogueBilingual: 'off', literalBilingual: 'off', iconVisibility: 'all', targetLang: 'Korean', style: 'normal', temperature: 0.3, maxTokens: 8192, contextRange: 1, userPrompt: '', dictionary: '', retranslateStrength: 'normal', afterEditMode: 'notify', previewTranslate: 'off', previewCleanup: 'off', promptPresets: {}, charPresetMap: {} };
 // 베타 → 정식 설정 마이그레이션 (기존 사용자 설정 보존)
 if (!extension_settings[EXT_NAME] && extension_settings["cat-translator-beta"]) {
     extension_settings[EXT_NAME] = { ...extension_settings["cat-translator-beta"] };
@@ -121,6 +121,7 @@ async function processMessage(id, isInput = false, abortSignal = null, silent = 
             // 현재 swipe 첫 방문 → 번역 데이터 초기화 (다시 번역 가능 상태)
             delete msg.extra.original_mes;
             delete msg.extra.display_text;
+            delete msg.extra.cat_literal;
             delete msg.extra.cat_swipe_id;
             mesBlock.removeAttr('data-cat-translated');
             stContext.updateMessageBlock(msgId, msg);
@@ -181,7 +182,8 @@ async function processMessage(id, isInput = false, abortSignal = null, silent = 
             textToTranslate = msg.mes;
         }
 
-        const existingTranslation = hasTranslation ? msg.extra.display_text : null;
+        // 🚨 직역 병기 details 블록은 재번역 프롬프트 오염 방지 위해 제거
+        const existingTranslation = hasTranslation ? stripLiteralDetails(msg.extra.display_text) : null;
         const isRetranslation = hasTranslation;
 
         if (!silent && !isRetranslation) {
@@ -223,14 +225,24 @@ async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTran
     if (result && result.text && result.text.trim() && result.text !== textToTranslate) {
         if (!msg.extra) msg.extra = {};
         if (!msg.extra.original_mes) msg.extra.original_mes = textToTranslate;
-        msg.extra.display_text = result.text;
+        // 🚨 직역 병기: 직역 파트가 있으면 자연번역 아래 접이식 details 블록 합성 (인풋 제외)
+        let displayWithLiteral = result.text;
+        if (result.literal && !isInput) {
+            msg.extra.cat_literal = result.literal;
+            // 🚨 원문도 접이식 안에 포함 (이미 보유한 original_mes 재활용 — 토큰 0)
+            displayWithLiteral = result.text + '\n\n' + buildLiteralDetailsHtml(result.literal, msg.extra.original_mes || textToTranslate);
+            console.log('[CAT] 🔍 직역 병기 합성 완료 (원문 포함)');
+        } else {
+            delete msg.extra.cat_literal;
+        }
+        msg.extra.display_text = displayWithLiteral;
         if (msg.swipe_id !== undefined) {
             msg.extra.cat_swipe_id = msg.swipe_id;
             // 🚨 스와이프별 번역 보존 — 다른 스와이프로 전환했다 돌아와도 유지됨
             if (!msg.extra.swipe_translations) msg.extra.swipe_translations = {};
             msg.extra.swipe_translations[msg.swipe_id] = {
                 original_mes: textToTranslate,
-                display_text: result.text
+                display_text: displayWithLiteral
             };
         }
         // 🚨 입력 메시지: msg.mes = 번역문(영어) → AI 컨텍스트에 영어 전달
@@ -342,6 +354,7 @@ async function handleEditAreaTranslation(editArea, msgId, abortSignal) {
             // 🚨 사용자가 새 텍스트 입력 → 옛날 original_mes 삭제 (강제 초기화!)
             delete msg.extra.original_mes;
             delete msg.extra.display_text;
+            delete msg.extra.cat_literal;
             delete msg.extra.cat_swipe_id;
         }
     }
@@ -353,7 +366,7 @@ async function handleEditAreaTranslation(editArea, msgId, abortSignal) {
     const contextMsgs = gatherContextMessages(msgId, stContext, contextRange);
     const bilingualInputLangMap = { 'ko-en': 'English', 'ko-ja': 'Japanese', 'ko-zh': 'Chinese' };
     const inputTargetLang = (settings.dialogueBilingual && settings.dialogueBilingual !== 'off') ? (bilingualInputLangMap[settings.dialogueBilingual] || settings.targetLang) : settings.targetLang;
-    const inputSettings = { ...settings, dialogueBilingual: 'off', targetLang: inputTargetLang };
+    const inputSettings = { ...settings, dialogueBilingual: 'off', literalBilingual: 'off', targetLang: inputTargetLang };
     const result = await fetchTranslation(sourceText, inputSettings, stContext, { forceLang: null, prevTranslation: prevTrans, contextMessages: contextMsgs, abortSignal });
     
     if (result && result.text !== currentText) {
@@ -378,6 +391,7 @@ function revertMessage(id) {
     const editArea = $(`.mes[mesid="${msgId}"]`).find('textarea.edit_textarea:visible, textarea.mes_edit_textarea:visible, textarea:visible').first();
     if (editArea.length > 0) { const originalText = editArea.data('cat-original-text'); if (originalText) { setTextareaValue(editArea[0], originalText); editArea.removeData('cat-original-text').removeData('cat-last-translated').removeData('cat-last-target-lang'); catNotify(`${getThemeEmoji()} 원본 텍스트로 복구 완료!`, "success"); } else { catNotify("⚠️ 복구할 원본이 없습니다.", "warning"); } return; }
     if (msg.extra?.display_text) delete msg.extra.display_text;
+    if (msg.extra?.cat_literal) delete msg.extra.cat_literal;
     if (msg.extra?.original_mes) {
         // 🚨 입력 메시지는 msg.mes가 번역문이므로 원문 복원 필요
         // 출력 메시지는 msg.mes가 이미 원문이므로 덮어써도 동일
@@ -537,6 +551,7 @@ jQuery(async () => {
         
         if (mode === 'auto') {
             delete msg.extra.display_text;
+            delete msg.extra.cat_literal;
             if (msg.extra.swipe_translations && msg.swipe_id !== undefined) {
                 delete msg.extra.swipe_translations[msg.swipe_id];
             }
@@ -733,6 +748,7 @@ jQuery(async () => {
             
             if (mode === 'auto') {
                 delete msg.extra.display_text;
+                delete msg.extra.cat_literal;
                 // 🚨 swipe_translations에서도 현재 swipe 삭제 (restoreSwipeTranslations 차단)
                 if (msg.extra.swipe_translations && msg.swipe_id !== undefined) {
                     delete msg.extra.swipe_translations[msg.swipe_id];
