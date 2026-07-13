@@ -374,17 +374,21 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
     const bilingualActive = settings.dialogueBilingual && settings.dialogueBilingual !== 'off';
     if (!bilingualActive && !silent) {
         const strippedForCheck = stripMetaForDetection(text);
-        const korCount = (strippedForCheck.match(/[가-힣]/g) || []).length;
-        const engCount = (strippedForCheck.match(/[a-zA-Z]/g) || []).length;
-        const total = korCount + engCount;
+        // 🚨 글자 수 → 단어 수 기반 판정 (2026-07-10)
+        // 한글은 글자당 정보량이 커서 글자 수로 재면 한국어가 과소평가됨
+        // (영문 고유명사 몇 개가 알파벳 수십 자를 차지 → 한글 비율 급락 → 감지 실패)
+        // 실사용 제보: 한입한출 캐릭터에서 "번역이 너무 짧아요" 오경고
+        const korWords = (strippedForCheck.match(/[가-힣]+/g) || []).length;
+        const engWords = (strippedForCheck.match(/[a-zA-Z]+/g) || []).length;
+        const total = korWords + engWords;
         if (total > 0) {
-            const korRatio = korCount / total;
-            const engRatio = engCount / total;
-            if (engRatio >= 0.7 && targetLang === 'English') {
+            const korRatio = korWords / total;
+            const engRatio = engWords / total;
+            if (engRatio >= 0.6 && targetLang === 'English') {
                 catNotify(`${getThemeEmoji()} 원문이 이미 영어입니다! 목표 언어를 확인해주세요!`, "warning");
                 return null;
             }
-            if (korRatio >= 0.7 && targetLang === 'Korean') {
+            if (korRatio >= 0.6 && targetLang === 'Korean') {
                 catNotify(`${getThemeEmoji()} 원문이 이미 한국어입니다! 목표 언어를 확인해주세요!`, "warning");
                 return null;
             }
@@ -720,9 +724,20 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
         
         // 🚨 응답 품질 검증: 너무 짧은 응답 감지 (번역 실패)
         // 원문보다 30% 미만이면 번역 실패 가능성 (yaml/HTML 다 빠진 경우 등)
+        // 단, 원문이 이미 타겟 언어면 AI가 할 일이 없어 짧게 뱉는 게 정상 → 오경고 억제
         if (cleaned.length < text.length * 0.3 && text.length > 100) {
-            console.warn(`[CAT] ⚠️ 응답 너무 짧음: ${cleaned.length}자 (원문 ${text.length}자, ${Math.round(cleaned.length / text.length * 100)}%)`);
-            catNotify(`${getThemeEmoji()} 번역이 너무 짧아요 (${Math.round(cleaned.length / text.length * 100)}%). 다시 시도해보세요.`, "warning");
+            const srcStripped = stripMetaForDetection(text);
+            const srcKor = (srcStripped.match(/[가-힣]+/g) || []).length;
+            const srcEng = (srcStripped.match(/[a-zA-Z]+/g) || []).length;
+            const srcTotal = srcKor + srcEng;
+            const alreadyTarget = srcTotal > 0 && (
+                (targetLang === 'Korean' && srcKor / srcTotal >= 0.45) ||
+                (targetLang === 'English' && srcEng / srcTotal >= 0.45)
+            );
+            console.warn(`[CAT] ⚠️ 응답 너무 짧음: ${cleaned.length}자 (원문 ${text.length}자, ${Math.round(cleaned.length / text.length * 100)}%)${alreadyTarget ? ' — 원문이 이미 타겟 언어라 경고 억제' : ''}`);
+            if (!alreadyTarget) {
+                catNotify(`${getThemeEmoji()} 번역이 너무 짧아요 (${Math.round(cleaned.length / text.length * 100)}%). 다시 시도해보세요.`, "warning");
+            }
         }
         
         // 🚨 번역 언어 검증: 한국어 번역인데 한국어가 거의 없음
