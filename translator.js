@@ -206,6 +206,13 @@ For structured panels (HTML wrappers + yaml/json blocks):
 - Text INSIDE \`\`\` fences is STORY DATA, not program code. Translating the readable text inside is MANDATORY.
 - Copying a fenced block unchanged in its source language is a FAILURE. Only structure (fences, keys, indentation) stays — prose and values MUST be translated.
 
+[STRUCTURE LOCK - messages with multiple blocks/tags]
+When the source has several structural elements (\`\`\` fences, <tags> like <Facts> or <infoblock>, --- dividers, timestamps, headers):
+- Preserve their EXACT order and position. The Nth structural element in the source is the Nth in your output.
+- Text NEVER moves across a block boundary. A date/timestamp/label stays attached to exactly the block it belongs to in the source.
+- Never re-emit, duplicate, or drop a tag, fence, or divider. Count of \`\`\` and <tags> in output = count in source.
+- Translate prose inside each block IN PLACE. The skeleton stays identical; only the human-readable text changes.
+
 [OUTPUT LANGUAGE PURITY - ABSOLUTE]
 Output must be EXCLUSIVELY in target language. NO mixing.
 - To Korean: translate ALL English words (transliterate unknown proper nouns: Jenkins→젠킨스). Never leave "however/actually/well/anyway" untranslated. English only allowed inside code/HTML or glossary right-side.
@@ -774,6 +781,22 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
                     _lastDebugLog.formalityMix = `다체 ${daEndings} / 요·니다체 ${yoEndings}`;
                 }
             } catch (e) { /* 감지 실패는 무시 */ }
+            
+            // 🚨 구조 밀림 감지 (콘솔 전용): 원문 대비 펜스/태그/구분선 개수가 다르면 구조 붕괴 신호
+            try {
+                const countStruct = (s) => ({
+                    fence: (s.match(/```/g) || []).length,
+                    tag: (s.match(/<\/?[a-zA-Z][a-zA-Z0-9_-]*\s*>/g) || []).length,
+                    hr: (s.match(/^---\s*$/gm) || []).length
+                });
+                const srcS = countStruct(text);
+                const outS = countStruct(checkText);
+                if (srcS.fence + srcS.tag + srcS.hr > 0 &&
+                    (srcS.fence !== outS.fence || srcS.tag !== outS.tag || srcS.hr !== outS.hr)) {
+                    console.warn(`[CAT] ⚠️ 구조 밀림 의심: 펜스 ${srcS.fence}→${outS.fence} / 태그 ${srcS.tag}→${outS.tag} / 구분선 ${srcS.hr}→${outS.hr} (재번역 권장)`);
+                    _lastDebugLog.structureMismatch = `펜스 ${srcS.fence}→${outS.fence}, 태그 ${srcS.tag}→${outS.tag}, 구분선 ${srcS.hr}→${outS.hr}`;
+                }
+            } catch (e) { /* 감지 실패 무시 */ }
             
             // 🚨 코드펜스(인포블럭) 내부 미번역 감지: 펜스 안이 영어 그대로 남은 경우
             const fenceBlocks = [...checkText.matchAll(/```[a-zA-Z]*\n?([\s\S]*?)```/g)];
