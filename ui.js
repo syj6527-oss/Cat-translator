@@ -156,11 +156,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
     $('#ct-key-toggle').on('click', () => { const i = $('#ct-key'); i.attr('type', i.attr('type') === 'password' ? 'text' : 'password'); });
     
     // 🚨 디버그 팝업
-    $('#ct-debug-btn').on('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        showDebugPopup();
-    });
+    $('#ct-debug-btn').on('click', showDebugPopup);
     
     // 🚨 자동 저장 디바운스 시스템
     const autoSave = () => {
@@ -705,7 +701,7 @@ function showDebugPopup() {
     const thought = log?.thought ? (log.thought.length > 300 ? log.thought.substring(0, 300) + '...(생략)' : log.thought) : null;
 
     const overlay = $(`
-    <dialog class="cat-debug-overlay" style="position:fixed; inset:0; width:100vw; height:100dvh; max-width:none; max-height:none; margin:0; border:0; box-sizing:border-box; background:rgba(0,0,0,0.6); z-index:2147483647; display:none; align-items:flex-start; justify-content:center; padding:16px; overflow-y:auto; -webkit-overflow-scrolling:touch; isolation:isolate;">
+    <div class="cat-debug-overlay" style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); z-index:999999; display:flex; align-items:flex-start; justify-content:center; padding:16px; overflow-y:auto; -webkit-overflow-scrolling:touch;">
         <div class="cat-debug-modal" style="background:var(--SmartThemeBodyColor, #222); color:var(--SmartThemeEmColor, #fff); border-radius:12px; max-width:600px; width:100%; margin:auto; padding:20px; box-shadow:0 8px 32px rgba(0,0,0,0.5);">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
                 <div style="font-size:1.1em; font-weight:bold;">🐛 마지막 LLM 응답 / 에러 로그</div>
@@ -741,23 +737,11 @@ function showDebugPopup() {
             </div>
             <div style="text-align:center; font-size:0.8em; opacity:0.5;">💡 이 로그를 복사해서 보여주면 정확한 원인 파악 가능!</div>
         </div>
-    </dialog>`);
+    </div>`);
 
     $('body').append(overlay);
-    const closeOverlay = () => {
-        if (overlay[0]?.open && typeof overlay[0].close === 'function') overlay[0].close();
-        overlay.remove();
-    };
-    try {
-        if (typeof overlay[0]?.showModal !== 'function') throw new Error('dialog unsupported');
-        overlay[0].showModal();
-        overlay.css('display', 'flex');
-    } catch (e) {
-        overlay.attr('open', 'open').css('display', 'flex');
-    }
-    overlay.on('cancel', (e) => { e.preventDefault(); closeOverlay(); });
-    overlay.find('.cat-debug-close').on('click', closeOverlay);
-    overlay.on('click', (e) => { if ($(e.target).hasClass('cat-debug-overlay')) closeOverlay(); });
+    overlay.find('.cat-debug-close').on('click', () => overlay.remove());
+    overlay.on('click', (e) => { if ($(e.target).hasClass('cat-debug-overlay')) overlay.remove(); });
     overlay.find('.cat-debug-copy').on('click', () => {
         const copyText = `[🐱 Translator 디버그 로그]\n시각: ${ts}\n모드: ${mode}\n모델: ${model}\n에러: ${error}\n\n--- 프롬프트 ---\n${log?.prompt || '없음'}\n\n--- LLM 응답 ---\n${log?.rawResponse || '없음'}\n\n--- 후처리 결과 ---\n${log?.cleaned || '없음'}${thought ? '\n\n--- 사고 과정 ---\n' + thought : ''}`;
         navigator.clipboard.writeText(copyText).then(() => catNotify('📋 디버그 로그 복사 완료!', 'success')).catch(() => catNotify('복사 실패 — 수동으로 복사해주세요', 'warning'));
@@ -1082,3 +1066,4 @@ export function setupMutationObserver(processMessageFn, revertMessageFn, setting
     observer.observe(chatContainer, { childList: true, subtree: true });
     injectMessageButtons(processMessageFn, revertMessageFn); injectInputButtons(settings, stContext, processMessageFn); setInterval(() => injectInputButtons(settings, stContext, processMessageFn), 2000);
 }
+
