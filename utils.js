@@ -64,7 +64,11 @@ export function cleanResult(text, originalText = null) {
     if (!text) return "";
     
     // AI가 앞에 붙이는 "번역:" 등 접두어 제거
-    let cleaned = text.replace(/^(번역|Translation|Output|Input|Result):\s*/gi, "");
+    let cleaned = text;
+    const responsePrefix = /^(번역|Translation|Output|Input|Result):\s*/i;
+    if (!originalText || !responsePrefix.test(originalText.trimStart())) {
+        cleaned = cleaned.replace(responsePrefix, "");
+    }
     
     // 🚨 추론/사고 과정 텍스트 자동 제거 (Gemini Pro 모델이 종종 출력)
     // 영어 추론 단락만 정확히 제거 (한국어가 시작되는 지점까지만)
@@ -89,20 +93,13 @@ export function cleanResult(text, originalText = null) {
     
     // AI가 응답 전체를 코드블록으로 감싼 경우만 벗기기
     const wholeCodeBlockMatch = cleaned.match(/^```[a-z]*\n([\s\S]*?)\n```\s*$/i);
-    if (wholeCodeBlockMatch) {
+    const originalHasCodeFence = originalText && /```/.test(originalText);
+    if (wholeCodeBlockMatch && !originalHasCodeFence) {
         const inner = wholeCodeBlockMatch[1];
         if (!inner.includes('```')) {
             cleaned = inner;
         }
     }
-    
-    // 🚨 한영병기 후처리: "대사"[번역] → "대사 [번역]" (따옴표 안으로 이동)
-    // 패턴1: "text"[한국어] → "text [한국어]"
-    cleaned = cleaned.replace(/"([^"]*?)"\s*\[([^\]]+)\]/g, '"$1 [$2]"');
-    // 패턴2: 「text」[한국어] → 「text [한국어]」
-    cleaned = cleaned.replace(/「([^」]*?)」\s*\[([^\]]+)\]/g, '「$1 [$2]」');
-    // 패턴3: 『text』[한국어] → 『text [한국어]』
-    cleaned = cleaned.replace(/『([^』]*?)』\s*\[([^\]]+)\]/g, '『$1 [$2]』');
     
     // 🚨 AI 거부/오류 응답 감지 (도구 거부, 검색 강제, 정책 거부 등)
     if (originalText) {
@@ -152,12 +149,12 @@ export function cleanResult(text, originalText = null) {
     }
     
     // 줄바꿈 정리 (원본 구조 보존하면서)
-    cleaned = cleaned
-        .replace(/\r\n/g, "\n")        // \r\n → \n 통일
-        .replace(/\n{4,}/g, "\n\n\n"); // 빈줄 4개 이상만 정리 (3개까지는 유지)
+    cleaned = cleaned.replace(/\r\n/g, "\n");
     
     // 🚨 문단 구조 보존: 원문과 비교해서 문단 수 부족하면 경고
-    if (originalText && originalText.length > 200) {
+    const originalHasLockedStructure = originalText &&
+        (/```/.test(originalText) || /<\/?[a-zA-Z][^>]*>/.test(originalText) || /^(?:---|___|\*\*\*)\s*$/m.test(originalText));
+    if (originalText && originalText.length > 200 && !originalHasLockedStructure) {
         const origParagraphs = originalText.split(/\n{2,}/).filter(p => p.trim().length > 0);
         const transParagraphs = cleaned.split(/\n{2,}/).filter(p => p.trim().length > 0);
         
@@ -176,6 +173,208 @@ export function cleanResult(text, originalText = null) {
     cleaned = balanceQuotes(cleaned, originalText);
     
     return cleaned.trim();
+}
+
+// 번역 대상의 구조 문법은 토큰으로 잠그고, 사람에게 읽히는 내용만 모델에 노출한다.
+// 모델이 토큰을 누락하거나 순서를 바꾸면 복원 단계에서 결과를 거부한다.
+export function protectTranslationStructure(text) {
+    const source = String(text || '').replace(/\r\n/g, '\n');
+    let namespace = 'CATFMT';
+    while (source.includes(`@@${namespace}_`)) namespace += 'X';
+    
+    const tokens = [];
+    const addToken = (value, type) => {
+        const marker = `@@${namespace}_${String(tokens.length).padStart(4, '0')}@@`;
+        tokens.push({ marker, value, type });
+        return marker;
+    };
+    
+    // 실제 펜스를 숨겨 모델이 코드로 취급해 내부 번역을 건너뛰는 것을 막는다.
+    let protectedText = source.replace(/```[^\n]*\n[\s\S]*?```/g, (block) => {
+        const firstBreak = block.indexOf('\n');
+        const closeIndex = block.lastIndexOf('```');
+        if (firstBreak < 0 || closeIndex <= firstBreak) return block;
+        
+        const opening = block.slice(0, firstBreak);
+        const inner = block.slice(firstBreak + 1, closeIndex);
+        const closing = block.slice(closeIndex);
+        const protectedLines = inner.split('\n').map((line) => {
+            const lineAnchor = addToken('', 'code-line');
+            if (!line) return lineAnchor;
+            
+            const indent = line.match(/^[\t ]*/)?.[0] || '';
+            const body = line.slice(indent.length);
+            const indentToken = indent ? addToken(indent, 'indent') : '';
+            
+            if (/^(?:---|___|\*\*\*)\s*$/.test(body)) {
+                return lineAnchor + addToken(line, 'whole-line');
+            }
+            return lineAnchor + indentToken + body;
+        }).join('\n');
+        
+        return `${addToken(opening, 'fence')}\n${protectedLines}${addToken(closing, 'fence')}`;
+    });
+    
+    // 태그 속성, 매크로, 주석 경계는 번역시키지 않는다.
+    protectedText = protectedText.replace(
+        /<!--|-->|<\/?[a-zA-Z][^>]*>|\{\{[\s\S]*?\}\}/g,
+        (value) => addToken(value, 'inline')
+    );
+    
+    // 코드블럭 밖의 정규식 트리거용 구분선도 원문 그대로 보존한다.
+    protectedText = protectedText.replace(
+        /^(?:[\t ]*)(?:---|___|\*\*\*)(?:[\t ]*)$/gm,
+        (value) => addToken(value, 'whole-line')
+    );
+    
+    const expectedMarkers = tokens
+        .map(token => ({ marker: token.marker, index: protectedText.indexOf(token.marker) }))
+        .filter(item => item.index >= 0)
+        .sort((a, b) => a.index - b.index)
+        .map(item => item.marker);
+    
+    return {
+        text: protectedText,
+        source,
+        namespace,
+        tokens,
+        expectedMarkers,
+        hasStructure: expectedMarkers.length > 0
+    };
+}
+
+export function restoreTranslationStructure(text, protection) {
+    if (!protection?.hasStructure) {
+        return { ok: true, text: String(text || ''), reason: null };
+    }
+    
+    const output = String(text || '');
+    let previousIndex = -1;
+    for (const marker of protection.expectedMarkers) {
+        const firstIndex = output.indexOf(marker);
+        if (firstIndex < 0) {
+            return { ok: false, text: null, reason: `구조 토큰 누락: ${marker}` };
+        }
+        if (output.indexOf(marker, firstIndex + marker.length) >= 0) {
+            return { ok: false, text: null, reason: `구조 토큰 중복: ${marker}` };
+        }
+        if (firstIndex <= previousIndex) {
+            return { ok: false, text: null, reason: `구조 토큰 순서 변경: ${marker}` };
+        }
+        previousIndex = firstIndex;
+    }
+    
+    const markerPattern = new RegExp(`@@${protection.namespace}_\\d{4}@@`, 'g');
+    const outputMarkers = output.match(markerPattern) || [];
+    if (outputMarkers.length !== protection.expectedMarkers.length) {
+        return { ok: false, text: null, reason: '알 수 없는 구조 토큰이 추가되었거나 삭제됨' };
+    }
+    
+    let restored = output;
+    for (const token of protection.tokens) {
+        restored = restored.replace(token.marker, token.value);
+    }
+    
+    const parity = compareProtectedStructure(protection.source, restored);
+    if (!parity.ok) {
+        return { ok: false, text: null, reason: parity.reason };
+    }
+    return { ok: true, text: restored, reason: null };
+}
+
+export function restoreTranslationTokens(text, protection) {
+    if (!protection?.hasStructure) {
+        return { ok: true, text: String(text || ''), reason: null };
+    }
+    
+    let restored = String(text || '');
+    for (const token of protection.tokens) {
+        restored = restored.split(token.marker).join(token.value);
+    }
+    
+    const unresolved = new RegExp(`@@${protection.namespace}_\\d{4}@@`).test(restored);
+    if (unresolved) {
+        return { ok: false, text: null, reason: '직역 파트에 복원되지 않은 구조 토큰이 남음' };
+    }
+    return { ok: true, text: restored, reason: null };
+}
+
+function compareProtectedStructure(source, output) {
+    const sourceSignature = getStructureSignature(source);
+    const outputSignature = getStructureSignature(output);
+    if (sourceSignature.length !== outputSignature.length) {
+        return {
+            ok: false,
+            reason: `구조 요소 개수 불일치: ${sourceSignature.length}→${outputSignature.length}`
+        };
+    }
+    for (let i = 0; i < sourceSignature.length; i++) {
+        if (sourceSignature[i] !== outputSignature[i]) {
+            return { ok: false, reason: `구조 요소 변경: ${sourceSignature[i]}→${outputSignature[i]}` };
+        }
+    }
+    
+    const sourceBlocks = getFencedBlockShapes(source);
+    const outputBlocks = getFencedBlockShapes(output);
+    if (sourceBlocks.length !== outputBlocks.length) {
+        return { ok: false, reason: `코드블럭 개수 불일치: ${sourceBlocks.length}→${outputBlocks.length}` };
+    }
+    for (let i = 0; i < sourceBlocks.length; i++) {
+        const src = sourceBlocks[i];
+        const out = outputBlocks[i];
+        if (src.lines.length !== out.lines.length) {
+            return { ok: false, reason: `코드블럭 ${i + 1} 줄 수 불일치: ${src.lines.length}→${out.lines.length}` };
+        }
+        for (let lineIndex = 0; lineIndex < src.lines.length; lineIndex++) {
+            const srcLine = src.lines[lineIndex];
+            const outLine = out.lines[lineIndex];
+            const srcIndent = srcLine.match(/^[\t ]*/)?.[0] || '';
+            const outIndent = outLine.match(/^[\t ]*/)?.[0] || '';
+            if (srcIndent !== outIndent) {
+                return { ok: false, reason: `코드블럭 ${i + 1} 들여쓰기 변경 (${lineIndex + 1}행)` };
+            }
+            if (!srcLine.trim() && outLine.trim()) {
+                return { ok: false, reason: `코드블럭 ${i + 1} 빈 줄 변경 (${lineIndex + 1}행)` };
+            }
+            
+            const keyPrefix = getStructuredKeyPrefix(srcLine);
+            if (keyPrefix && !outLine.startsWith(keyPrefix)) {
+                return { ok: false, reason: `코드블럭 ${i + 1} 키 변경 (${lineIndex + 1}행)` };
+            }
+        }
+    }
+    return { ok: true, reason: null };
+}
+
+function getStructureSignature(text) {
+    const matches = [];
+    const patterns = [
+        /```[^\n]*/g,
+        /<!--|-->|<\/?[a-zA-Z][^>]*>|\{\{[\s\S]*?\}\}/g,
+        /^(?:[\t ]*)(?:---|___|\*\*\*)(?:[\t ]*)$/gm
+    ];
+    patterns.forEach((pattern) => {
+        for (const match of String(text || '').matchAll(pattern)) {
+            matches.push({ index: match.index, value: match[0] });
+        }
+    });
+    return matches.sort((a, b) => a.index - b.index).map(item => item.value);
+}
+
+function getFencedBlockShapes(text) {
+    return [...String(text || '').matchAll(/```[^\n]*\n([\s\S]*?)```/g)]
+        .map(match => ({ lines: match[1].split('\n') }));
+}
+
+function getStructuredKeyPrefix(line) {
+    const jsonKey = line.match(/^(\s*"[^"]+"\s*:\s*)/);
+    if (jsonKey) return jsonKey[1];
+    
+    const bracketKey = line.match(/^(\s*\[[^:\]\n]{1,80}:\s*)/);
+    if (bracketKey) return bracketKey[1];
+    
+    const yamlKey = line.match(/^(\s*(?:-\s*)?[^:\n]{1,80}:\s*)/);
+    return yamlKey ? yamlKey[1] : null;
 }
 
 // 🚨 문단 구조 자동 복구 (한 덩어리로 합쳐진 경우)
@@ -309,10 +508,28 @@ export function getCacheModelKey(settings) {
     let key;
     if (settings.profile) key = `profile:${settings.profile}`;
     else key = settings.directModel || 'default';
-    if (settings.dialogueBilingual && settings.dialogueBilingual !== 'off') {
-        key += `::bilingual:${settings.dialogueBilingual}`;
+    
+    const dialogueMode = settings.dialogueBilingual || 'off';
+    const literalMode = settings.literalBilingual === 'on' ? 'on' : 'off';
+    const style = settings.style || 'normal';
+    const temperature = Number.isFinite(Number(settings.temperature)) ? Number(settings.temperature) : 0.3;
+    const promptHash = hashCacheSetting(settings.userPrompt || '');
+    const dictionaryHash = hashCacheSetting(settings.dictionary || '');
+    const contextRange = Number.isFinite(Number(settings.contextRange)) ? Number(settings.contextRange) : 1;
+    
+    return `${key}::cache-v3::dialogue:${dialogueMode}::literal:${literalMode}` +
+        `::style:${style}::temp:${temperature}::context:${contextRange}` +
+        `::prompt:${promptHash}::dict:${dictionaryHash}`;
+}
+
+function hashCacheSetting(value) {
+    let hash = 0x811c9dc5;
+    const normalized = String(value).replace(/\r\n/g, '\n').trim();
+    for (let i = 0; i < normalized.length; i++) {
+        hash ^= normalized.charCodeAt(i);
+        hash = Math.imul(hash, 0x01000193);
     }
-    return key;
+    return (hash >>> 0).toString(36);
 }
 
 export function getModelTheme(modelName) {
@@ -428,7 +645,7 @@ export function analyzeSpeechPatterns(contextMessages) {
     const speakerData = {};
     contextMessages.forEach(msg => {
         const speaker = msg.speaker || msg.name || 'Unknown';
-        const text = msg.text || msg.mes || '';
+        const text = msg.voiceText || msg.text || msg.mes || '';
         if (!text) return;
         
         if (!speakerData[speaker]) {
@@ -457,8 +674,9 @@ export function analyzeSpeechPatterns(contextMessages) {
         
         // 한국어 어미 (반말/존댓말) - 정확한 패턴만 매칭
         // 반말: -야, -어, -지, -다 + 종결 (단 -다음 같은 것 제외)
-        const banmalEndings = (text.match(/[다어야지네군](?=[.!?\s"」』]|$)/g) || []).length;
-        const jondaetmalEndings = (text.match(/요(?=[.!?\s"」』]|$)|습니다|입니다|시오|십시오|세요/g) || []).length;
+        const speechText = dialogues.length > 0 ? dialogues.join(' ') : text;
+        const banmalEndings = (speechText.match(/[다어야지네군](?=[.!?\s"」』]|$)/g) || []).length;
+        const jondaetmalEndings = (speechText.match(/요(?=[.!?\s"」』]|$)|습니다|입니다|시오|십시오|세요/g) || []).length;
         // 반말이 존댓말로 오탐되는 케이스 보정
         const correctedBanmal = Math.max(0, banmalEndings - jondaetmalEndings);
         d.banmal += correctedBanmal;

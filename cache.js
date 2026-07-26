@@ -108,7 +108,7 @@ export async function deleteCached(originalText, targetLang, modelKey = 'default
 }
 
 // ─── 캐시 저장 (모델별 분리) ──────────────────────────────────────
-export async function setCached(originalText, targetLang, translated, thought = null, modelKey = 'default') {
+export async function setCached(originalText, targetLang, translated, thought = null, modelKey = 'default', literal = null) {
     if (!db) return;
     const normalized = normalizeText(originalText);
     const key = `${normalized}::${targetLang}::${modelKey}`;
@@ -134,6 +134,7 @@ export async function setCached(originalText, targetLang, translated, thought = 
             original: originalText,
             normalized,
             translated,
+            literal,
             lang: targetLang,
             thought,
             history,
