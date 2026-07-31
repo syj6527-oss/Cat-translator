@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Translator v1.0.4 - cache.js
+// 🙀 Translator Beta v1.0.5-beta.7 - cache.js
 // IndexedDB 영구 캐시: 유사 문장 매칭, Thought 캐싱, 통계
 // ============================================================
 
@@ -10,6 +10,7 @@ const DB_VERSION = 2;
 const STORE_TRANSLATIONS = 'translations';
 const STORE_STATS = 'stats';
 const EXPIRY_DAYS = 30;
+const CACHE_KEY_VERSION = 'raw-v4';
 
 let db = null;
 let stats = { hits: 0, misses: 0, tokensSaved: 0 };
@@ -71,18 +72,25 @@ export function getStats() {
     };
 }
 
-// ─── 캐시 조회 (유사 문장 매칭 + 모델별 분리) ─────────────────────
-export async function getCached(originalText, targetLang, modelKey = 'default') {
+function normalizeSourceForKey(text) {
+    return String(text || '').replace(/\r\n/g, '\n').trim();
+}
+
+export function buildCacheKey(originalText, targetLang, modelKey = 'default') {
+    return `${CACHE_KEY_VERSION}:${normalizeSourceForKey(originalText)}::${targetLang}::${modelKey}`;
+}
+
+// ─── 캐시 조회 (원문 구조 + 모델 + 문맥별 분리) ─────────────────────
+export async function getCached(originalText, targetLang, modelKey = 'default', scopeKey = '') {
     if (!db) return null;
-    const normalized = normalizeText(originalText);
-    const key = `${normalized}::${targetLang}::${modelKey}`;
+    const key = buildCacheKey(originalText, targetLang, modelKey);
 
     try {
         const tx = db.transaction(STORE_TRANSLATIONS, 'readonly');
         const store = tx.objectStore(STORE_TRANSLATIONS);
         const result = await promisifyRequest(store.get(key));
 
-        if (result && !isExpired(result.timestamp)) {
+        if (result && !isExpired(result.timestamp) && (result.scopeKey || '') === scopeKey) {
             stats.hits++;
             stats.tokensSaved += estimateTokens(originalText);
             saveStats();
@@ -98,8 +106,7 @@ export async function getCached(originalText, targetLang, modelKey = 'default') 
 // ─── 캐시 삭제 (특정 항목) ──────────────────────────────────────
 export async function deleteCached(originalText, targetLang, modelKey = 'default') {
     if (!db) return;
-    const normalized = normalizeText(originalText);
-    const key = `${normalized}::${targetLang}::${modelKey}`;
+    const key = buildCacheKey(originalText, targetLang, modelKey);
     try {
         const tx = db.transaction(STORE_TRANSLATIONS, 'readwrite');
         const store = tx.objectStore(STORE_TRANSLATIONS);
@@ -107,11 +114,11 @@ export async function deleteCached(originalText, targetLang, modelKey = 'default
     } catch (e) { /* ignore */ }
 }
 
-// ─── 캐시 저장 (모델별 분리) ──────────────────────────────────────
-export async function setCached(originalText, targetLang, translated, thought = null, modelKey = 'default') {
+// ─── 캐시 저장 (원문 구조 + 모델 + 문맥별 분리) ──────────────────────
+export async function setCached(originalText, targetLang, translated, thought = null, modelKey = 'default', literal = null, scopeKey = '') {
     if (!db) return;
     const normalized = normalizeText(originalText);
-    const key = `${normalized}::${targetLang}::${modelKey}`;
+    const key = buildCacheKey(originalText, targetLang, modelKey);
 
     try {
         const tx = db.transaction(STORE_TRANSLATIONS, 'readwrite');
@@ -128,27 +135,37 @@ export async function setCached(originalText, targetLang, translated, thought = 
         if (!history.some(h => h.text === translated)) {
             history.push({ text: translated, time: Date.now(), pinned: false });
         }
+        // 🚨 beta.16: 무한 누적 방지 — 비고정 항목 최근 20개만 유지 (📌핀은 무제한)
+        const unpinnedCount = history.filter(h => !h.pinned).length;
+        if (unpinnedCount > 20) {
+            let toDrop = unpinnedCount - 20;
+            for (let i = 0; i < history.length && toDrop > 0; ) {
+                if (!history[i].pinned) { history.splice(i, 1); toDrop--; }
+                else i++;
+            }
+        }
 
         const entry = {
             key,
             original: originalText,
             normalized,
             translated,
+            literal,
             lang: targetLang,
             thought,
+            scopeKey,
             history,
             timestamp: Date.now()
         };
 
-        store.put(entry);
+        await promisifyRequest(store.put(entry));
     } catch (e) { console.error('[CAT] Cache write error:', e); }
 }
 
 // ─── 히스토리 조회 (모델별) ──────────────────────────────────
 export async function getHistory(originalText, targetLang, modelKey = 'default') {
     if (!db) return [];
-    const normalized = normalizeText(originalText);
-    const key = `${normalized}::${targetLang}::${modelKey}`;
+    const key = buildCacheKey(originalText, targetLang, modelKey);
 
     try {
         const tx = db.transaction(STORE_TRANSLATIONS, 'readonly');
@@ -161,8 +178,7 @@ export async function getHistory(originalText, targetLang, modelKey = 'default')
 // ─── 즐겨찾기 핀 토글 (모델별) ──────────────────────────────
 export async function togglePin(originalText, targetLang, translationText, modelKey = 'default') {
     if (!db) return;
-    const normalized = normalizeText(originalText);
-    const key = `${normalized}::${targetLang}::${modelKey}`;
+    const key = buildCacheKey(originalText, targetLang, modelKey);
 
     try {
         const tx = db.transaction(STORE_TRANSLATIONS, 'readwrite');
@@ -172,8 +188,23 @@ export async function togglePin(originalText, targetLang, translationText, model
             const item = result.history.find(h => h.text === translationText);
             if (item) {
                 item.pinned = !item.pinned;
-                store.put(result);
+                await promisifyRequest(store.put(result));
             }
+        }
+    } catch (e) { /* 무시 */ }
+}
+
+// ─── 히스토리 개별 삭제 (beta.16) ────────────────────
+export async function deleteHistoryItem(originalText, targetLang, translationText, modelKey = 'default') {
+    if (!db) return;
+    const key = buildCacheKey(originalText, targetLang, modelKey);
+    try {
+        const tx = db.transaction(STORE_TRANSLATIONS, 'readwrite');
+        const store = tx.objectStore(STORE_TRANSLATIONS);
+        const result = await promisifyRequest(store.get(key));
+        if (result && result.history) {
+            result.history = result.history.filter(h => h.text !== translationText);
+            await promisifyRequest(store.put(result));
         }
     } catch (e) { /* 무시 */ }
 }
@@ -184,7 +215,7 @@ export async function clearAllCache() {
     try {
         const tx = db.transaction(STORE_TRANSLATIONS, 'readwrite');
         const store = tx.objectStore(STORE_TRANSLATIONS);
-        store.clear();
+        await promisifyRequest(store.clear());
         stats = { hits: 0, misses: 0, tokensSaved: 0 };
         saveStats();
     } catch (e) { console.error('[CAT] Cache clear error:', e); }
@@ -217,7 +248,11 @@ async function cleanExpired() {
 
 // ─── 설정 내보내기/가져오기 ─────────────────────────
 export function exportSettings(settings) {
-    const data = JSON.stringify(settings, null, 2);
+    // 🚨 beta.10: API 키·자격증명은 내보내기에서 제외 — 설정 공유 시 키 유출 방지
+    const SENSITIVE_KEYS = ['customKey', 'vertexKey'];
+    const sanitized = { ...settings };
+    for (const k of SENSITIVE_KEYS) delete sanitized[k];
+    const data = JSON.stringify(sanitized, null, 2);
     const blob = new Blob([data], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
