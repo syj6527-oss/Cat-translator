@@ -1081,6 +1081,9 @@ async function executeBulkTranslation(count, settings, stContext, processMessage
 }
 
 export async function showHistoryPopup(originalText, targetLang, anchorEl, onSelect, modelKey = 'default', prevDisplay = null) {
+    // 🚨 v1.1.0 보안: 번역문(모델 출력)을 HTML 삽입 전 이스케이프 — 팝업은 DOMPurify 미경유라 필수
+    // (반드시 함수 최상단: renderItem이 아래에서 즉시 호출하므로 늦게 선언하면 TDZ ReferenceError로 팝업 전체가 죽음)
+    const escapePopupHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     $('.cat-history-popup').remove();
     const history = await getHistory(originalText, targetLang, modelKey);
     // 🚨 beta.13: 재번역 탭 = 무조건 팝업 — 히스토리가 적어도(0~2개) 팝업을 띄우고,
@@ -1117,8 +1120,6 @@ export async function showHistoryPopup(originalText, targetLang, anchorEl, onSel
     const ghostGuard = () => Date.now() - popupOpenedAt < 400;
     // 🚨 beta.14: 팝업이 닫히는 모든 경로에서 버튼 글로우 정리 (안 끄면 60초까지 계속 돎)
     const stopAnchorGlow = () => anchorEl.find('.cat-emoji-icon').removeClass('cat-glow-anim').removeAttr('data-cat-glow-start');
-    // 🚨 v1.1.0 보안: 번역문(모델 출력)을 HTML로 삽입하기 전 이스케이프 — 팝업은 DOMPurify 미경유라 필수
-    const escapePopupHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     // 🚨 beta.16: 팝업 제거 시 document 닫기 핸들러도 반드시 해제 — 잔존하면 다음 탭의
     // touchstart를 가로채 글로우를 먼저 꺼버려 "번역 중단"이 통째로 무력화됨
     const closePopup = () => { popup.remove(); $(document).off('click.catHistoryClose touchstart.catHistoryClose'); };
