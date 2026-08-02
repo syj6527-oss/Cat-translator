@@ -350,8 +350,11 @@ export function buildSystemInstruction(settings, options = {}) {
     if (dialogueMode === 'off') {
         activeRules.push('Dialogue bilingual mode is OFF. Do not retain source-language dialogue or add translation brackets.');
     } else {
-        activeRules.push('Dialogue bilingual mode is ON. Source text may be retained ONLY inside quoted dialogue, followed by one target-language translation block inside the same quote.');
-        activeRules.push('Narration remains target-language only.');
+        activeRules.push('Dialogue bilingual mode is ON. Format: "English dialogue. [한국어 번역.]" — the [bracket] goes INSIDE the same quotation marks, immediately after the English.');
+        activeRules.push('Narration (everything outside quotes) is Korean ONLY. Never keep English narration, and never output narration twice (English then Korean = FAILURE).');
+        activeRules.push('WRONG: "I am not a heater, [나 온풍기 아니야,]" Peter muttered, picking up the fork. 그는 포크를 들며 중얼거렸다. ← narration duplicated');
+        activeRules.push('WRONG: "I am not a heater" "[나 온풍기 아니야]" ← bracket outside the quotes');
+        activeRules.push('CORRECT: "I am not a heater. [나 온풍기 아니야.]" 그가 포크를 들며 중얼거렸다.');
     }
     
     if (literalMode) {
@@ -1176,6 +1179,8 @@ function postProcessBilingualText(text, bilingualMode) {
                 console.log('[CAT] 🔄 병기 역순 감지 → 자동 교정');
                 return `"${eng.trim()} [${kor.trim()}]${rest}"`;
             });
+            // 🚨 v1.1.2: "영어" "[한국어]" 분리 출력 병합 (괄호가 별도 따옴표로 밀려난 케이스)
+            processed = processed.replace(/"([^"]*[A-Za-z][^"]*)"\s*"\[([^\]]*[가-힣][^\]]*)\]"/g, '"$1 [$2]"');
             processed = processed.replace(/"([^"]*?)"\s*\[([^\]]+)\]/g, '"$1 [$2]"');
             processed = processed.replace(/\."\s*\[/g, '. [');
             return processed;
@@ -1277,6 +1282,16 @@ export function assessTranslationQuality(output, originalText, settings, targetL
     const sourceAnalysis = analyzeLanguage(source);
     const outputAnalysis = analyzeLanguage(qualityText);
     const dialogueBilingual = (settings.dialogueBilingual || 'off') !== 'off';
+
+    // 🚨 v1.1.2: 병기 모드에서 서술이 영어로 남거나(미번역) 영어+한국어 이중 출력되면
+    // 따옴표 밖 영단어가 급증 → 감지해 재시도 (고유명사 몇 개로는 문턱 미달)
+    if (dialogueBilingual && targetLang === 'Korean') {
+        const outsideQuotes = natural.replace(/"[^"]*"/g, '').replace(/「[^」]*」/g, '').replace(/『[^』]*』/g, '');
+        const engWordsOutside = (outsideQuotes.match(/\b[a-zA-Z]{3,}\b/g) || []).length;
+        if (engWordsOutside > 10) {
+            addIssue(`병기 서술 미번역/이중 출력 의심 (따옴표 밖 영단어 ${engWordsOutside}개)`, 40);
+        }
+    }
 
     if (source.trim() === natural.trim() &&
         !isClearlyLanguage(sourceAnalysis, targetLang, 0.78)) {
