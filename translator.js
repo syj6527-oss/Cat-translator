@@ -44,6 +44,7 @@ NEVER write phrases like:
 - "Let me translate this..."
 Your reasoning belongs in the thinking field (if available), NEVER in the response body.
 Output starts IMMEDIATELY with the translated text. No preamble. No introduction. No conclusion.
+Never wrap your output in \`\`\` code fences. If the source has no code fences, your output must have none.
 
 [NO CITATION / REFERENCE MARKERS - CRITICAL]
 NEVER append citation-style markers like [1], [3], [5] to sentences in your output.
@@ -882,6 +883,22 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
         }
 
         let cleaned = cleanResult(result, text, structureProtection);
+        
+        // 🚨 v1.1.1: 모델 장식 펜스 회수 — 원문에 \`\`\`가 0개인데 응답에 있으면
+        // 그 펜스는 100% 모델이 멋대로 감싼 장식 (인풋 번역에서 특히 빈발)
+        // → 거부 대신 펜스 마커만 벗겨 살림 (내용 유지). 원문에 펜스가 있으면 절대 미적용
+        if (cleaned && !/```/.test(text) && /```/.test(cleaned)) {
+            const stripped = cleaned
+                .replace(/^```[a-zA-Z]*\s*$/gm, '')
+                .replace(/```/g, '')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+            if (stripped) {
+                console.log('[CAT] 🧹 모델 장식 펜스 제거 (원문 펜스 0개 → 응답 펜스 전량 제거)');
+                cleaned = stripped;
+            }
+        }
+        
         if (!cleaned || !cleaned.trim()) {
             const refused = result && /검색을 수행해야|cannot perform|cannot provide|작업을 수행할 수 없|사용자 사양을 준수/i.test(result);
             const finalMessage = refused
