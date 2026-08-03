@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Translator v1.2.9 - ui.js
+// 🐱 Translator v1.2.10 - ui.js
 // ============================================================
 import { catNotify, catNotifyProgress, getThemeEmoji, getCompletionEmoji, getModelTheme, setTextareaValue, resolveInputTranslationDirection, normalizeStyleKey, normalizeNarrationRegister, normalizeDialogueRegister, resolveRegisterSettings } from './utils.js';
 import { getStats, clearAllCache, exportSettings, importSettings, getHistory, togglePin, deleteHistoryItem } from './cache.js';
@@ -13,7 +13,7 @@ let _suppressAutoSave = false;  // 🚨 프리셋 로드 중 autoSave/스타일�
 let _autoSaveTimer = null;  // 🚨 모듈 스코프로 이동 (CHAT_CHANGED에서 접근 필요)
 const _translatedEditSessions = new Map();
 const INPUT_BUTTON_BINDING_VERSION = '1.2.9';
-const MESSAGE_BUTTON_BINDING_VERSION = '1.2.9';
+const MESSAGE_BUTTON_BINDING_VERSION = '1.2.10';
 
 function isUserMessageElement(element, msgId, chatRef = null) {
     const id = Number.parseInt(msgId, 10);
@@ -783,36 +783,43 @@ export function injectMessageButtons(processMessageFn, revertMessageFn) {
     // 🚨 메시지 아이콘 숨김 설정 적용
     const vis = $('#ct-icon-visibility').val() || 'all';
     if (vis === 'hide-message') { $('.cat-btn-group').addClass('cat-hidden'); }
+    const handleMessageTranslateClick = function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const mesElement = $(this).closest('.mes');
+        const msgId = $(this).data('mesid') ?? mesElement.attr('mesid');
+        if (msgId === undefined) return;
+        const isUser = isUserMessageElement(mesElement, msgId);
+        // 🚨 beta.15: 팝업이 열려 있으면 재탭 = 팝업 닫기 (토글, 조용히) — 글로우 상태와 무관
+        const openPopup = $('.cat-history-popup');
+        if (openPopup.length) {
+            openPopup.remove();
+            $(document).off('click.catHistoryClose touchstart.catHistoryClose');
+            $(this).find('.cat-emoji-icon').removeClass('cat-glow-anim').removeAttr('data-cat-glow-start');
+            return;
+        }
+        // 🚨 beta.9: 번역 진행 중 재탭 = 중단 (수동/자동 공통)
+        if ($(this).find('.cat-emoji-icon').hasClass('cat-glow-anim')) {
+            if (typeof window.__catAbortTranslation === 'function' && window.__catAbortTranslation(msgId)) {
+                catNotify('🔴 번역을 중단했어요.', 'error');
+                $(this).find('.cat-emoji-icon').removeClass('cat-glow-anim').removeAttr('data-cat-glow-start');
+                return;
+            }
+        }
+        processMessageFn(msgId, isUser);
+    };
+    // 유저 메시지 컨테이너가 click 전파를 막는 ST 레이아웃에서도 버튼 자체에서 먼저 처리한다.
+    // 재주입 때마다 현재 콜백으로 교체해 확장 재로드 후 남은 버튼도 즉시 복구한다.
+    $('.cat-mes-trans-btn')
+        .off('click.catMesDirect')
+        .on('click.catMesDirect', handleMessageTranslateClick);
     if (window._catMesBtnDelegated !== MESSAGE_BUTTON_BINDING_VERSION) {
         // 확장 업데이트 후 boolean 플래그만 남고 실제 위임 핸들러가 사라지는 상태를 복구한다.
         $(document).off('click', '.cat-mes-trans-btn');
         $(document).off('click', '.cat-mes-revert-btn');
         $(document).off('click', '.cat-mes-edit-btn');
         window._catMesBtnDelegated = MESSAGE_BUTTON_BINDING_VERSION;
-        $(document).on('click.catMesButtons', '.cat-mes-trans-btn', function (e) {
-            e.stopPropagation();
-            const mesElement = $(this).closest('.mes');
-            const msgId = $(this).data('mesid') ?? mesElement.attr('mesid');
-            if (msgId === undefined) return;
-            const isUser = isUserMessageElement(mesElement, msgId);
-            // 🚨 beta.15: 팝업이 열려 있으면 재탭 = 팝업 닫기 (토글, 조용히) — 글로우 상태와 무관
-            const openPopup = $('.cat-history-popup');
-            if (openPopup.length) {
-                openPopup.remove();
-                $(document).off('click.catHistoryClose touchstart.catHistoryClose');
-                $(this).find('.cat-emoji-icon').removeClass('cat-glow-anim').removeAttr('data-cat-glow-start');
-                return;
-            }
-            // 🚨 beta.9: 번역 진행 중 재탭 = 중단 (수동/자동 공통)
-            if ($(this).find('.cat-emoji-icon').hasClass('cat-glow-anim')) {
-                if (typeof window.__catAbortTranslation === 'function' && window.__catAbortTranslation(msgId)) {
-                    catNotify('🔴 번역을 중단했어요.', 'error');
-                    $(this).find('.cat-emoji-icon').removeClass('cat-glow-anim').removeAttr('data-cat-glow-start');
-                    return;
-                }
-            }
-            processMessageFn(msgId, isUser);
-        });
+        $(document).on('click.catMesButtons', '.cat-mes-trans-btn', handleMessageTranslateClick);
         $(document).on('click.catMesButtons', '.cat-mes-revert-btn', function (e) { e.stopPropagation(); const msgId = $(this).data('mesid') || $(this).closest('.mes').attr('mesid'); if (msgId !== undefined) revertMessageFn(msgId); });
         // 🚨 🐟/🍖 클릭 → 바로 번역문 편집 모드 진입
         $(document).on('click.catMesButtons', '.cat-mes-edit-btn', function (e) {
