@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Translator v1.2.10 - translator.js
+// 🐱 Translator v1.2.11 - translator.js
 // ============================================================
 import { secret_state, SECRET_KEYS } from '../../../../scripts/secrets.js';
 import { cleanResult, catNotify, detectLanguageDirection, stripMetaForDetection, getThemeEmoji, getCompletionEmoji, getCacheModelKey, applyPreReplaceWithCount, analyzeSpeechPatterns, splitLiteralAppendix, protectTranslationStructure, restoreTranslationStructure, restoreTranslationTokens, validateTranslationStructure, analyzeLanguage, isClearlyLanguage, assembleDialogueBilingual, normalizeStyleKey, getStyleRegisterPolicy, analyzeKoreanRegisterConsistency } from './utils.js';

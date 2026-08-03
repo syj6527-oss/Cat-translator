@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Translator v1.2.10 - ui.js
+// 🐱 Translator v1.2.11 - ui.js
 // ============================================================
 import { catNotify, catNotifyProgress, getThemeEmoji, getCompletionEmoji, getModelTheme, setTextareaValue, resolveInputTranslationDirection, normalizeStyleKey, normalizeNarrationRegister, normalizeDialogueRegister, resolveRegisterSettings } from './utils.js';
 import { getStats, clearAllCache, exportSettings, importSettings, getHistory, togglePin, deleteHistoryItem } from './cache.js';
@@ -12,7 +12,7 @@ let _settingsRef = null;  // 🚨 collectSettings에서 promptPresets/charPreset
 let _suppressAutoSave = false;  // 🚨 프리셋 로드 중 autoSave/스타일핸들러 차단
 let _autoSaveTimer = null;  // 🚨 모듈 스코프로 이동 (CHAT_CHANGED에서 접근 필요)
 const _translatedEditSessions = new Map();
-const INPUT_BUTTON_BINDING_VERSION = '1.2.9';
+const INPUT_BUTTON_BINDING_VERSION = '1.2.11';
 const MESSAGE_BUTTON_BINDING_VERSION = '1.2.10';
 
 function isUserMessageElement(element, msgId, chatRef = null) {
@@ -596,38 +596,47 @@ export function applyTheme(theme, notify = false) {
 }
 
 export function injectInputButtons(settings, stContext, processMessageFn) {
-    const existingInputButton = $('#cat-input-btn');
+    let transBtn = $('#cat-input-btn');
+    let revertBtn = $('#cat-input-revert');
+    let bulkBtn = $('#cat-bulk-btn');
+    const existingInputButton = transBtn;
     if (existingInputButton.length > 0) {
         const bindingIsCurrent = existingInputButton.attr('data-cat-input-binding') === INPUT_BUTTON_BINDING_VERSION;
-        const buttonGroupIsComplete = $('#cat-input-revert').length > 0 && $('#cat-bulk-btn').length > 0;
+        const buttonGroupIsComplete = revertBtn.length > 0 && bulkBtn.length > 0;
         if (!bindingIsCurrent || !buttonGroupIsComplete) {
-            // 확장 업데이트/부분 로드 뒤 남은 버튼 껍데기는 클릭 핸들러가 없을 수 있다.
-            // 현재 모듈이 세 버튼을 한 번만 다시 만들어 수동 번역 경로를 복구한다.
+            // 구버전 버튼 묶음은 한 번 교체한다. 같은 버전 버튼도 아래에서 실제 핸들러를
+            // 매번 다시 연결하므로 DOM 복제/부분 렌더 뒤 "보이지만 무반응" 상태가 남지 않는다.
             $('#cat-input-btn, #cat-input-revert, #cat-bulk-btn').remove();
+            transBtn = $(); revertBtn = $(); bulkBtn = $();
             console.warn('[CAT] 🔧 낡은 입력 버튼 감지 → 수동 번역 핸들러 재연결');
-        } else {
-            const icon = existingInputButton.find('.cat-emoji-icon'); if (isTranslatingInput) icon.addClass('cat-glow-anim'); else icon.removeClass('cat-glow-anim');
-            // 🚨 아이콘 숨김 설정 지속 적용
-            const vis = settings.iconVisibility || 'all';
-            if (vis === 'hide-input') { $('#cat-input-btn, #cat-input-revert, #cat-bulk-btn').hide(); }
-            return;
         }
     }
-    const target = $('#send_but'); if (target.length === 0) return;
-    const emoji = getThemeEmoji();
-    const transBtn = $(`<div id="cat-input-btn" data-cat-input-binding="${INPUT_BUTTON_BINDING_VERSION}" title="번역" class="cat-input-icon interactable"><span class="cat-emoji-icon">${emoji}</span></div>`);
-    const revertBtn = $(`<div id="cat-input-revert" title="되돌리기" class="cat-input-icon interactable"><i class="fa-solid fa-rotate-left"></i></div>`);
-    const bulkBtn = $(`<div id="cat-bulk-btn" title="전체 번역" class="cat-input-icon interactable"><span class="cat-emoji-icon">⚡</span></div>`);
-    target.before(transBtn).before(revertBtn).before(bulkBtn);
+    if (transBtn.length === 0) {
+        const target = $('#send_but'); if (target.length === 0) return;
+        const emoji = getThemeEmoji();
+        transBtn = $(`<div id="cat-input-btn" data-cat-input-binding="${INPUT_BUTTON_BINDING_VERSION}" title="번역" class="cat-input-icon interactable"><span class="cat-emoji-icon">${emoji}</span></div>`);
+        revertBtn = $(`<div id="cat-input-revert" title="되돌리기" class="cat-input-icon interactable"><i class="fa-solid fa-rotate-left"></i></div>`);
+        bulkBtn = $(`<div id="cat-bulk-btn" title="전체 번역" class="cat-input-icon interactable"><span class="cat-emoji-icon">⚡</span></div>`);
+        target.before(transBtn).before(revertBtn).before(bulkBtn);
+    }
+    transBtn.attr('data-cat-input-binding', INPUT_BUTTON_BINDING_VERSION);
+    const icon = transBtn.find('.cat-emoji-icon');
+    if (isTranslatingInput) icon.addClass('cat-glow-anim'); else icon.removeClass('cat-glow-anim');
     
     // 🚨 생성 직후 아이콘 숨김 설정 적용
     if ((settings.iconVisibility || 'all') === 'hide-input') {
         transBtn.hide(); revertBtn.hide(); bulkBtn.hide();
     }
 
-    transBtn.on('click', async (e) => {
+    const handleInputTranslateClick = async function (e) {
         e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+        const clickedTransBtn = $(this);
         const sendArea = $('#send_textarea');
+        if (sendArea.length === 0) {
+            console.error('[CAT] 입력창 #send_textarea를 찾지 못해 수동 번역을 시작할 수 없습니다.');
+            catNotify('🙀 입력창을 찾지 못했어요. 화면을 새로고침한 뒤 다시 시도해주세요.', 'error');
+            return;
+        }
         
         // 🚨 모바일 IME 조합 커밋: 입력 중이면 blur로 조합 확정 후 읽기
         // (삼성 한글 IME 조합 중 val()이 이전 값을 반환 → 새 인풋 유실 방지)
@@ -639,7 +648,7 @@ export function injectInputButtons(settings, stContext, processMessageFn) {
         const currentText = sendArea.val().trim();
         if (isTranslatingInput || !currentText) return;
         const requestId = ++inputTranslationRequestId;
-        isTranslatingInput = true; transBtn.find('.cat-emoji-icon').addClass('cat-glow-anim');
+        isTranslatingInput = true; clickedTransBtn.find('.cat-emoji-icon').addClass('cat-glow-anim');
         try {
             const lastTranslated = sendArea.data('cat-last-translated'); const originalText = sendArea.data('cat-original-text'); const lastTargetLang = sendArea.data('cat-last-target-lang');
             const isRetry = (lastTranslated && currentText === lastTranslated);
@@ -728,15 +737,15 @@ export function injectInputButtons(settings, stContext, processMessageFn) {
         } finally {
             if (requestId === inputTranslationRequestId) {
                 isTranslatingInput = false;
-                transBtn.find('.cat-emoji-icon').removeClass('cat-glow-anim');
+                $('#cat-input-btn .cat-emoji-icon').removeClass('cat-glow-anim');
             }
         }
-    });
-    revertBtn.on('click', (e) => {
+    };
+    const handleInputRevertClick = function (e) {
         e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
         inputTranslationRequestId++;
         isTranslatingInput = false;
-        transBtn.find('.cat-emoji-icon').removeClass('cat-glow-anim');
+        $('#cat-input-btn .cat-emoji-icon').removeClass('cat-glow-anim');
         const sendArea = $('#send_textarea'); const originalText = sendArea.data('cat-original-text');
         if (originalText) {
             setTextareaValue(sendArea[0], originalText);
@@ -750,8 +759,22 @@ export function injectInputButtons(settings, stContext, processMessageFn) {
         } else {
             catNotify("⚠️ 복구할 원본이 없습니다.", "warning");
         }
-    });
-    bulkBtn.on('click', (e) => { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); showBulkPopup(e, settings, stContext, processMessageFn); });
+    };
+    const handleInputBulkClick = function (e) {
+        e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+        showBulkPopup(e, settings, stContext, processMessageFn);
+    };
+
+    // 버튼 자체 핸들러는 부모가 이벤트 전파를 막는 레이아웃을 처리한다.
+    transBtn.off('click.catInputDirect').on('click.catInputDirect', handleInputTranslateClick);
+    revertBtn.off('click.catInputDirect').on('click.catInputDirect', handleInputRevertClick);
+    bulkBtn.off('click.catInputDirect').on('click.catInputDirect', handleInputBulkClick);
+
+    // 입력부가 버튼 DOM을 복제해 직접 핸들러가 사라져도 다음 주기까지 기다리지 않고 처리한다.
+    // injectInputButtons가 호출될 때마다 현재 settings/context 콜백으로 교체한다.
+    $(document).off('click.catInputButtons', '#cat-input-btn').on('click.catInputButtons', '#cat-input-btn', handleInputTranslateClick);
+    $(document).off('click.catInputButtons', '#cat-input-revert').on('click.catInputButtons', '#cat-input-revert', handleInputRevertClick);
+    $(document).off('click.catInputButtons', '#cat-bulk-btn').on('click.catInputButtons', '#cat-bulk-btn', handleInputBulkClick);
 }
 
 export function injectMessageButtons(processMessageFn, revertMessageFn) {
