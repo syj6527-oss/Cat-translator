@@ -217,7 +217,7 @@ When the source has several structural elements (\`\`\` fences, <tags> like <Fac
 
 [OUTPUT LANGUAGE PURITY - ABSOLUTE]
 The natural translation must be EXCLUSIVELY in target language. NO accidental mixing.
-- Bilingual dialogue mode may retain source dialogue only inside its required quotation format.
+- Source text may be retained ONLY where the [ACTIVE OUTPUT MODE] rules explicitly say so. If they do not, output must be pure target language with zero source retention.
 - Literal appendix mode may repeat source chunks only after the literal marker.
 - To Korean: translate ALL English words (transliterate unknown proper nouns: Jenkins→젠킨스). Never leave "however/actually/well/anyway" untranslated. English only allowed inside code/HTML or glossary right-side.
 - To English: PURE English, NO Korean characters. Romanize Korean names (민수→Minsu, 서울→Seoul). Never leave "시저/그러나/그리고" in English output.
@@ -1689,7 +1689,7 @@ Just plain, fully-translated text.
             parts.push(`
 [MATCHED GLOSSARY - ${targetLangName}]
 For each SOURCE=TARGET entry below, use TARGET when SOURCE appears in the current source. Allow only grammatical inflection; do not reverse entries or echo SOURCE in brackets. Translate all other text normally.
-In bilingual output (original line + Korean part): the preserved ORIGINAL line keeps the SOURCE spelling exactly as written; apply TARGET only inside the Korean part. Never let TARGET appear in the original-language line.
+Apply TARGET normally in your Korean translation. (Any bilingual display is assembled by the extension afterward — your output itself stays pure Korean.)
 ${matchedLines.join('\n')}`);
         }
     }

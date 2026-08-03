@@ -961,13 +961,15 @@ jQuery(async () => {
     // 없거나 발화하지 않는 환경 제보("둘 다 켜도 입력 자동 안 됨") 대응.
     // MESSAGE_SENT(전송 시 확실히 발화하는 고전 이벤트)도 함께 걸고, 중복 발화는 1.5초 가드로 1회 처리
     const _inputAutoDedup = { id: -1, ts: 0 };
-    const handleInputAuto = (d, evName) => {
+    // 🚨 v1.2.1: 입력자동 상태를 📋 디버그에서 볼 수 있게 기록 (모바일 진단용)
+    window._catInputAutoStatus = window._catInputAutoStatus || { ev: '없음 (트리거 기록 없음)', id: -1, ts: 0 };
+    const handleInputAutoCore = (msgId, evName) => {
         if (settings.autoMode === 'none' || settings.autoMode === 'output') return;
-        const msgId = parseInt(typeof d === 'object' ? (d.messageId ?? d.id ?? d.index) : d, 10);
-        if (isNaN(msgId)) { console.warn(`[CAT] ⚠️ 입력 자동: ${evName} 페이로드에서 msgId 추출 실패`, d); return; }
+        if (isNaN(msgId)) { console.warn(`[CAT] ⚠️ 입력 자동: ${evName} msgId 추출 실패`); return; }
         const now = Date.now();
         if (_inputAutoDedup.id === msgId && now - _inputAutoDedup.ts < 1500) return;
         _inputAutoDedup.id = msgId; _inputAutoDedup.ts = now;
+        window._catInputAutoStatus = { ev: evName, id: msgId, ts: now };
         console.log(`[CAT] 🔔 입력 자동 트리거 (${evName}) #${msgId}`);
         const renderedChatRef = getLiveChat();
         setTimeout(() => {
@@ -977,6 +979,28 @@ jQuery(async () => {
             processMessage(msgId, true, null, false, true);
         }, 500);
     };
+    const handleInputAuto = (d, evName) => {
+        const msgId = parseInt(typeof d === 'object' ? (d.messageId ?? d.id ?? d.index) : d, 10);
+        handleInputAutoCore(msgId, evName);
+    };
+    // 🚨 v1.2.1: DOM 레벨 폴백 — ST 이벤트가 아예 발화하지 않는 환경 대응.
+    // 전송 버튼 클릭/엔터 전송을 직접 감지해 마지막 유저 메시지를 처리 (dedup이 이벤트와의 중복을 흡수)
+    const scheduleInputAutoFromDom = (srcName) => {
+        if (settings.autoMode === 'none' || settings.autoMode === 'output') return;
+        setTimeout(() => {
+            const chat = getLiveChat();
+            if (!chat || !chat.length) return;
+            // 🚨 v1.2.2: 전송 직후 봇 응답 생성이 시작되면 마지막 메시지가 봇 메시지 —
+            // 끝에서부터 최대 4개 안에서 가장 최근 유저 메시지를 찾아 처리
+            for (let i = chat.length - 1; i >= Math.max(0, chat.length - 4); i--) {
+                if (chat[i]?.is_user) { handleInputAutoCore(i, 'dom:' + srcName); return; }
+            }
+        }, 700);
+    };
+    $(document).on('click.catInputAuto touchend.catInputAuto', '#send_but', () => scheduleInputAutoFromDom('send_but'));
+    $(document).on('keydown.catInputAuto', '#send_textarea', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey && !e.originalEvent?.isComposing) scheduleInputAutoFromDom('enter');
+    });
     if (stContext.event_types.USER_MESSAGE_RENDERED) {
         stContext.eventSource.on(stContext.event_types.USER_MESSAGE_RENDERED, (d) => handleInputAuto(d, 'USER_MESSAGE_RENDERED'));
     } else {

@@ -892,7 +892,7 @@ function showDebugPopup() {
             <div class="cat-debug-body">
             <div style="background:rgba(255,100,100,0.1); border:1px solid rgba(255,100,100,0.3); border-radius:8px; padding:10px; margin-bottom:10px;">
                 <div style="font-weight:bold; margin-bottom:4px;">📌 에러 정보</div>
-                <div style="font-size:0.85em; opacity:0.8;">시각: ${ts}<br>에러: ${String(error).replace(/</g, '&lt;').replace(/>/g, '&gt;')}<br>복구: ${String(recovery).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+                <div style="font-size:0.85em; opacity:0.8;">시각: ${ts}<br>에러: ${String(error).replace(/</g, '&lt;').replace(/>/g, '&gt;')}<br>복구: ${String(recovery).replace(/</g, '&lt;').replace(/>/g, '&gt;')}<br>입력자동: ${(() => { const s = window._catInputAutoStatus; return s && s.id >= 0 ? `${s.ev} #${s.id} (${new Date(s.ts).toLocaleTimeString()})` : '트리거 기록 없음'; })()}</div>
             </div>
             <div style="background:rgba(100,180,255,0.1); border:1px solid rgba(100,180,255,0.3); border-radius:8px; padding:10px; margin-bottom:10px;">
                 <div style="font-weight:bold; margin-bottom:4px;">🔑 API 호출 상태</div>

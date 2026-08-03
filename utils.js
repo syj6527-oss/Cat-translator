@@ -1222,6 +1222,17 @@ export function assembleDialogueBilingual(sourceText, koreanText) {
     if (korQuotes.length !== srcQuotes.length) {
         return { ok: false, reason: `대사 수 불일치 (원문 ${srcQuotes.length} vs 번역 ${korQuotes.length})`, text: koreanText };
     }
+    // 🚨 v1.2.2 방어: 모델이 지시를 어기고 구식 병기([괄호])나 영어를 남긴 출력이면
+    // 조립 시 중첩 괴물("영어 [영어 [한국어]]")이 되므로 조립하지 않고 그대로 폴백
+    if (korQuotes.some(q => q.includes('[') || q.includes(']'))) {
+        return { ok: false, reason: '번역 출력에 병기 괄호 잔존 (모델이 구식 형식으로 출력)', text: koreanText };
+    }
+    const korAll = korQuotes.join(' ');
+    const hangul = (korAll.match(/[가-힣]/g) || []).length;
+    const latin = (korAll.match(/[A-Za-z]/g) || []).length;
+    if (latin > hangul) {
+        return { ok: false, reason: '번역 대사가 순수 한국어가 아님 (영문 우세)', text: koreanText };
+    }
 
     // 순서대로 짝지어 번역문의 대사를 "원문대사 [한국어대사]"로 치환
     let idx = 0;
