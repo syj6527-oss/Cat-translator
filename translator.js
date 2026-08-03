@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Translator v1.2.4 - translator.js
+// 🐱 Translator v1.2.5 - translator.js
 // ============================================================
 import { secret_state, SECRET_KEYS } from '../../../../scripts/secrets.js';
 import { cleanResult, catNotify, detectLanguageDirection, stripMetaForDetection, getThemeEmoji, getCompletionEmoji, getCacheModelKey, applyPreReplaceWithCount, analyzeSpeechPatterns, splitLiteralAppendix, protectTranslationStructure, restoreTranslationStructure, restoreTranslationTokens, validateTranslationStructure, analyzeLanguage, isClearlyLanguage, assembleDialogueBilingual, normalizeStyleKey, getStyleRegisterPolicy, analyzeKoreanRegisterConsistency } from './utils.js';
@@ -641,6 +641,21 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
         };
     };
 
+    const finalizeBilingualOutput = (candidateOutput) => {
+        let finalized = candidateOutput;
+        if ((settings.dialogueBilingual || 'off') !== 'off') {
+            const pre = splitLiteralAppendix(finalized);
+            const asm = assembleDialogueBilingual(text, pre.natural);
+            if (asm.ok) {
+                finalized = pre.literal ? `${asm.text}\n<<<CAT_LITERAL>>>\n${pre.literal}` : asm.text;
+                console.log('[CAT] 🔗 병기 코드 조립 완료');
+            } else {
+                console.warn(`[CAT] 🔗 병기 조립 폴백 (순수 한국어 유지): ${asm.reason}`);
+            }
+        }
+        return finalized;
+    };
+
     const recordBoundaryRecovery = (recovery) => {
         if (!recovery) return;
         const boundaries = [];
@@ -677,9 +692,12 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
         console.warn(`[CAT] 🛡️ 재시도 결과도 거부됨: ${reason}`);
         if (_softCandidate?.cleaned) {
             console.warn('[CAT] ↩️ 재시도 전 형식 정상 결과를 대신 적용');
+            if (!silent) {
+                catNotify(`${getThemeEmoji()} 보정본의 형식이 깨져 첫 번째 정상 번역을 적용했어요.`, 'warning');
+            }
             _lastDebugLog.cleaned = _softCandidate.cleaned;
             _lastDebugLog.quality = _softCandidate.quality;
-            return acceptTranslation(_softCandidate.cleaned, _softCandidate.thought);
+            return acceptTranslation(finalizeBilingualOutput(_softCandidate.cleaned), _softCandidate.thought);
         }
         if (!silent) {
             const shortReason = String(reason || '알 수 없는 형식 오류')
@@ -1014,16 +1032,26 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
         let quality = assessTranslationQuality(cleaned, text, settings, targetLang);
         if (!_softCandidate && quality.retry && _qualityRetry < 1) {
             const qualityReason = quality.issues.join('; ');
+            const firstRegisterIssues = quality.issues.filter(issue =>
+                /^(?:서술 |대사 |한 대사 안에서)/.test(issue)
+            );
+            const nonRegisterIssues = quality.issues.filter(issue => !firstRegisterIssues.includes(issue));
             console.warn(`[CAT] 🔁 품질 보강 재시도: ${qualityReason}`);
-            const fallbackCandidate = quality.score >= 70
+            // 말투만 이탈한 형식 정상본은 점수와 무관하게 보존한다.
+            // 보정 재시도가 태그/코드펜스를 깨뜨려도 번역 전체가 원문으로 돌아가지 않게 하는 안전망.
+            const fallbackCandidate = quality.score >= 70 ||
+                (firstRegisterIssues.length > 0 && nonRegisterIssues.length === 0)
                 ? { cleaned, thought, quality }
                 : null;
+            const qualityRetryReason = firstRegisterIssues.length > 0 && nonRegisterIssues.length === 0
+                ? `REGISTER-ONLY REPAIR: ${firstRegisterIssues.join('; ')}. Change only Korean sentence endings needed for the selected register. Preserve every word, paragraph, quotation, tag, code fence, divider, token, and line break exactly; never rewrite structure or add explanations.`
+                : `Improve translation quality: ${qualityReason}`;
             return fetchTranslation(text, settings, stContext, {
                 ...options,
                 forceFresh: true,
                 _qualityRetry: _qualityRetry + 1,
                 _softCandidate: fallbackCandidate,
-                retryReason: `Improve translation quality: ${qualityReason}`
+                retryReason: qualityRetryReason
             });
         }
         const registerIssues = quality.issues.filter(issue =>
@@ -1162,16 +1190,7 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
         
         // 🚨 v1.2.0: 한영 병기 코드 조립 — 모델의 순수 한국어 번역에 원문 대사를 기계적으로 짝지어 삽입
         // (괄호 위치·서술 이중·미번역이 구조적으로 불가능. 대사 수 불일치 시 순수 한국어로 우아한 폴백)
-        if ((settings.dialogueBilingual || 'off') !== 'off') {
-            const pre = splitLiteralAppendix(cleaned);
-            const asm = assembleDialogueBilingual(text, pre.natural);
-            if (asm.ok) {
-                cleaned = pre.literal ? `${asm.text}\n<<<CAT_LITERAL>>>\n${pre.literal}` : asm.text;
-                console.log('[CAT] 🔗 병기 코드 조립 완료');
-            } else {
-                console.warn(`[CAT] 🔗 병기 조립 폴백 (순수 한국어 유지): ${asm.reason}`);
-            }
-        }
+        cleaned = finalizeBilingualOutput(cleaned);
         
         // 🚨 직역 병기: 마커 기준 자연번역/직역 분리. 캐시엔 자연번역만 저장 (히스토리 팝업 마커 노출 방지)
         const literalSplit = splitLiteralAppendix(cleaned);
@@ -1185,7 +1204,7 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
             console.warn(`[CAT] ↩️ 품질 재시도 호출 실패 → 첫 결과 적용: ${e.message || e}`);
             _lastDebugLog.cleaned = _softCandidate.cleaned;
             _lastDebugLog.quality = _softCandidate.quality;
-            return acceptTranslation(_softCandidate.cleaned, _softCandidate.thought);
+            return acceptTranslation(finalizeBilingualOutput(_softCandidate.cleaned), _softCandidate.thought);
         }
         const errMsg = e.message || '알 수 없는 오류';
         _lastDebugLog.error = errMsg;
