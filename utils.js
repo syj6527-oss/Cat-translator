@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Translator v1.2.6 - utils.js
+// 🐱 Translator v1.2.7 - utils.js
 // 유틸리티: 알림, 정규식 세탁기, HTML/CSS 방어, 언어 감지
 // ============================================================
 
@@ -838,7 +838,7 @@ export function getCacheModelKey(settings) {
     const dictionaryHash = hashCacheSetting(settings.dictionary || '');
     const contextRange = Number.isFinite(Number(settings.contextRange)) ? Number(settings.contextRange) : 1;
     
-    return `${key}::cache-v5::dialogue:${dialogueMode}::literal:${literalMode}` +
+    return `${key}::cache-v6::dialogue:${dialogueMode}::literal:${literalMode}` +
         `::style:${style}::narration:${registerSettings.narrationRegister}` +
         `::dialogue-register:${registerSettings.dialogueRegister}` +
         `::temp:${temperature}::context:${contextRange}` +
@@ -918,7 +918,13 @@ function countKoreanRegisterEndings(text) {
     const allDa = (value.match(new RegExp(`다${boundary}`, 'g')) || []).length;
     const declarative = Math.max(0, allDa - formalDa);
     const conversational = (value.match(new RegExp(`(?:야|어|아|지|네|군|냐|니|자|라|가|와|줘|봐|돼|해|해라|했어|거야|거지|잖아|거든|겠어|마)${boundary}`, 'g')) || []).length;
-    return { polite, declarative, informal: declarative + conversational };
+    return {
+        polite,
+        formalPolite: formalDa,
+        haeyo: Math.max(0, polite - formalDa),
+        declarative,
+        informal: declarative + conversational
+    };
 }
 
 export function analyzeKoreanRegisterConsistency(text, settingsOrStyle = {}) {
@@ -938,6 +944,8 @@ export function analyzeKoreanRegisterConsistency(text, settingsOrStyle = {}) {
     if (policy.narration === 'polite') {
         if (narrationCounts.declarative >= 2 && narrationCounts.declarative >= narrationCounts.polite) {
             issues.push(`서술 존댓말 이탈 (-다 ${narrationCounts.declarative}/존대 ${narrationCounts.polite})`);
+        } else if (narrationCounts.haeyo >= 2 && narrationCounts.haeyo >= narrationCounts.formalPolite) {
+            issues.push(`서술 -습니다체 이탈 (-요 ${narrationCounts.haeyo}/-습니다 ${narrationCounts.formalPolite})`);
         }
     } else if (narrationCounts.polite >= 2 && narrationCounts.polite >= narrationCounts.declarative) {
         issues.push(`서술 반말·-다체 이탈 (존대 ${narrationCounts.polite}/-다 ${narrationCounts.declarative})`);

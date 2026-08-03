@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Translator v1.2.6 - ui.js
+// 🐱 Translator v1.2.7 - ui.js
 // ============================================================
 import { catNotify, catNotifyProgress, getThemeEmoji, getCompletionEmoji, getModelTheme, setTextareaValue, resolveInputTranslationDirection, normalizeStyleKey, normalizeNarrationRegister, normalizeDialogueRegister, resolveRegisterSettings } from './utils.js';
 import { getStats, clearAllCache, exportSettings, importSettings, getHistory, togglePin, deleteHistoryItem } from './cache.js';
@@ -174,7 +174,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
                 <div class="cat-setting-row" style="width:80px;"><label>온도</label><input type="number" id="ct-temperature" class="text_pole" value="${settings.temperature || ''}" min="0" max="1" step="0.1" placeholder="0.0~1.0"></div>
             </div>
             <div style="display:flex; gap:8px;">
-                <div class="cat-setting-row" style="flex:1;"><label>서술 말투</label><select id="ct-narration-register" class="text_pole"><option value="declarative">-다체</option><option value="polite">성인 존댓말</option></select></div>
+                <div class="cat-setting-row" style="flex:1;"><label>서술 말투</label><select id="ct-narration-register" class="text_pole"><option value="declarative">-다체</option><option value="polite">성인 존댓말 (-습니다체)</option></select></div>
                 <div class="cat-setting-row" style="flex:1;"><label>대사 말투</label><select id="ct-dialogue-register" class="text_pole"><option value="context">맥락 유지</option><option value="polite">존댓말</option><option value="informal">반말</option></select></div>
             </div>
             <div style="display:flex; gap:8px;">

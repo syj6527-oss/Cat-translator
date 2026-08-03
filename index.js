@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Translator v1.2.6
+// 🐱 Translator v1.2.7
 // ============================================================
 import { extension_settings, getContext } from '../../../../scripts/extensions.js';
 import { catNotify, getThemeEmoji, getCompletionEmoji, setTextareaValue, getModelTheme, detectLanguageDirection, getCacheModelKey, buildLiteralDetailsHtml, stripLiteralDetails, analyzeLanguage, isClearlyLanguage, resolveInputTranslationDirection, resolveRegisterSettings, shouldUpdateGlobalBaseline } from './utils.js';
@@ -1356,7 +1356,7 @@ jQuery(async () => {
             setSuppressAutoSave(false);
         }, 500);
     });
-    console.log('[CAT] 🐱 Translator v1.2.6 로드 완료!');
+    console.log('[CAT] 🐱 Translator v1.2.7 로드 완료!');
     
     // 🚨 페이지 가시성 변경 시 60초 이상 stuck 글로우 정리 (모바일 백그라운드 복귀 대응)
     document.addEventListener('visibilitychange', () => {

@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Translator v1.2.6 - translator.js
+// 🐱 Translator v1.2.7 - translator.js
 // ============================================================
 import { secret_state, SECRET_KEYS } from '../../../../scripts/secrets.js';
 import { cleanResult, catNotify, detectLanguageDirection, stripMetaForDetection, getThemeEmoji, getCompletionEmoji, getCacheModelKey, applyPreReplaceWithCount, analyzeSpeechPatterns, splitLiteralAppendix, protectTranslationStructure, restoreTranslationStructure, restoreTranslationTokens, validateTranslationStructure, analyzeLanguage, isClearlyLanguage, assembleDialogueBilingual, normalizeStyleKey, getStyleRegisterPolicy, analyzeKoreanRegisterConsistency } from './utils.js';
@@ -415,7 +415,7 @@ Example: "She couldn't hold back her tears." → "그녀는 끝내 눈물을 참
 function getKoreanRegisterInstruction(settings) {
     const policy = getStyleRegisterPolicy(settings);
     const narrationRule = policy.narration === 'polite'
-        ? `Narration: use mature adult-audience 해요체. Write polished prose with varied sentence length, natural connective clauses, and precise vocabulary; do not mechanically chain short subject+verb+요 sentences or repeatedly use connectors such as "그리고는/그래서". Prefer "시저는 식사를 마친 뒤 자리에서 일어났어요." to "시저는 밥을 먹었어요. 그리고는 자리에서 일어났어요." Keep every source event and nuance.`
+        ? `Narration: use mature adult-audience formal-polite written prose, with finite narration consistently ending in -습니다/-했습니다/-였습니다. Prefer natural -했습니다 forms over stiff -하였습니다 wording. Do not use conversational 해요체 (-요) in narration. Keep a polished narrative rhythm with varied sentence length, natural connective clauses, and precise vocabulary; avoid mechanically chaining short subject+verb sentences or repeatedly using connectors such as "그리고는/그래서". Prefer "시저는 식사를 마친 뒤 자리에서 일어났습니다." to "시저는 밥을 먹었어요. 그리고는 자리에서 일어났어요." Keep every source event and nuance without turning the prose into a report or announcement.`
         : 'Narration: use mature, natural declarative prose (-다/-었다/-한다), with consistent written rhythm.';
     const dialogueRule = policy.dialogue === 'polite'
         ? 'Dialogue: render finite spoken lines in natural 존댓말 suited to the relationship while preserving personality, vocabulary, slang, profanity, and emotional force. Fragments, interjections, names, and quoted terms do not need artificial polite endings.'
