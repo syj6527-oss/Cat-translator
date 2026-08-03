@@ -957,15 +957,34 @@ jQuery(async () => {
             processMessage(msgId, false, null, false, true);
         }, 500);
     });
-    stContext.eventSource.on(stContext.event_types.USER_MESSAGE_RENDERED, (d) => {
+    // 🚨 v1.2.0: 입력 자동번역 이중 구독 — ST 버전에 따라 USER_MESSAGE_RENDERED가
+    // 없거나 발화하지 않는 환경 제보("둘 다 켜도 입력 자동 안 됨") 대응.
+    // MESSAGE_SENT(전송 시 확실히 발화하는 고전 이벤트)도 함께 걸고, 중복 발화는 1.5초 가드로 1회 처리
+    const _inputAutoDedup = { id: -1, ts: 0 };
+    const handleInputAuto = (d, evName) => {
         if (settings.autoMode === 'none' || settings.autoMode === 'output') return;
-        const msgId = typeof d === 'object' ? d.messageId : d;
+        const msgId = parseInt(typeof d === 'object' ? (d.messageId ?? d.id ?? d.index) : d, 10);
+        if (isNaN(msgId)) { console.warn(`[CAT] ⚠️ 입력 자동: ${evName} 페이로드에서 msgId 추출 실패`, d); return; }
+        const now = Date.now();
+        if (_inputAutoDedup.id === msgId && now - _inputAutoDedup.ts < 1500) return;
+        _inputAutoDedup.id = msgId; _inputAutoDedup.ts = now;
+        console.log(`[CAT] 🔔 입력 자동 트리거 (${evName}) #${msgId}`);
         const renderedChatRef = getLiveChat();
         setTimeout(() => {
             if (getLiveChat() !== renderedChatRef) return;
+            const m = getLiveChat()?.[msgId];
+            if (!m || !m.is_user) return; // 유저 메시지만
             processMessage(msgId, true, null, false, true);
         }, 500);
-    });
+    };
+    if (stContext.event_types.USER_MESSAGE_RENDERED) {
+        stContext.eventSource.on(stContext.event_types.USER_MESSAGE_RENDERED, (d) => handleInputAuto(d, 'USER_MESSAGE_RENDERED'));
+    } else {
+        console.warn('[CAT] ⚠️ USER_MESSAGE_RENDERED 이벤트 없음 (구버전 ST?) — MESSAGE_SENT로 대체');
+    }
+    if (stContext.event_types.MESSAGE_SENT) {
+        stContext.eventSource.on(stContext.event_types.MESSAGE_SENT, (d) => handleInputAuto(d, 'MESSAGE_SENT'));
+    }
     
     // 🚨 메시지 편집 직접 감지 (옵저버 백업) — afterEditMode 'auto'/'notify' 안전 트리거
     stContext.eventSource.on(stContext.event_types.MESSAGE_EDITED, (msgId) => {

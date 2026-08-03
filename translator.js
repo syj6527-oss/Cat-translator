@@ -2,7 +2,7 @@
 // 🐱 Translator v1.1.0 - translator.js
 // ============================================================
 import { secret_state, SECRET_KEYS } from '../../../../scripts/secrets.js';
-import { cleanResult, catNotify, detectLanguageDirection, stripMetaForDetection, getThemeEmoji, getCompletionEmoji, getCacheModelKey, applyPreReplaceWithCount, analyzeSpeechPatterns, splitLiteralAppendix, protectTranslationStructure, restoreTranslationStructure, restoreTranslationTokens, validateTranslationStructure, analyzeLanguage, isClearlyLanguage } from './utils.js';
+import { cleanResult, catNotify, detectLanguageDirection, stripMetaForDetection, getThemeEmoji, getCompletionEmoji, getCacheModelKey, applyPreReplaceWithCount, analyzeSpeechPatterns, splitLiteralAppendix, protectTranslationStructure, restoreTranslationStructure, restoreTranslationTokens, validateTranslationStructure, analyzeLanguage, isClearlyLanguage , assembleDialogueBilingual } from './utils.js';
 import { deleteCached, getCached, setCached } from './cache.js';
 
 const LEGACY_SYSTEM_SHIELD = `[ABSOLUTE DIRECTIVE - VIOLATION = FAILURE]
@@ -350,11 +350,10 @@ export function buildSystemInstruction(settings, options = {}) {
     if (dialogueMode === 'off') {
         activeRules.push('Dialogue bilingual mode is OFF. Do not retain source-language dialogue or add translation brackets.');
     } else {
-        activeRules.push('Dialogue bilingual mode is ON. Format: "English dialogue. [한국어 번역.]" — the [bracket] goes INSIDE the same quotation marks, immediately after the English.');
-        activeRules.push('Narration (everything outside quotes) is Korean ONLY. Never keep English narration, and never output narration twice (English then Korean = FAILURE).');
-        activeRules.push('WRONG: "I am not a heater, [나 온풍기 아니야,]" Peter muttered, picking up the fork. 그는 포크를 들며 중얼거렸다. ← narration duplicated');
-        activeRules.push('WRONG: "I am not a heater" "[나 온풍기 아니야]" ← bracket outside the quotes');
-        activeRules.push('CORRECT: "I am not a heater. [나 온풍기 아니야.]" 그가 포크를 들며 중얼거렸다.');
+        // 🚨 v1.2.0: 병기 형식은 확장이 코드로 조립 — 모델에겐 가장 안정적인 '순수 한국어 전체 번역'만 요구
+        activeRules.push('Dialogue bilingual is handled BY THE EXTENSION after translation. Your job: translate EVERYTHING into pure Korean — dialogue AND narration.');
+        activeRules.push('Do NOT keep any English. Do NOT add [brackets] or bilingual pairs. Keep the same number of quoted dialogue segments as the source, in the same order.');
+        activeRules.push('Do not merge or split quoted dialogue segments — one source quote = one Korean quote.');
     }
     
     if (literalMode) {
@@ -1118,6 +1117,19 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
             checkFormalityMix(cleaned);
         }
         
+        // 🚨 v1.2.0: 한영 병기 코드 조립 — 모델의 순수 한국어 번역에 원문 대사를 기계적으로 짝지어 삽입
+        // (괄호 위치·서술 이중·미번역이 구조적으로 불가능. 대사 수 불일치 시 순수 한국어로 우아한 폴백)
+        if ((settings.dialogueBilingual || 'off') !== 'off') {
+            const pre = splitLiteralAppendix(cleaned);
+            const asm = assembleDialogueBilingual(text, pre.natural);
+            if (asm.ok) {
+                cleaned = pre.literal ? `${asm.text}\n<<<CAT_LITERAL>>>\n${pre.literal}` : asm.text;
+                console.log('[CAT] 🔗 병기 코드 조립 완료');
+            } else {
+                console.warn(`[CAT] 🔗 병기 조립 폴백 (순수 한국어 유지): ${asm.reason}`);
+            }
+        }
+        
         // 🚨 직역 병기: 마커 기준 자연번역/직역 분리. 캐시엔 자연번역만 저장 (히스토리 팝업 마커 노출 방지)
         const literalSplit = splitLiteralAppendix(cleaned);
         if (settings.literalBilingual === 'on' && !literalSplit.literal && targetLang === 'Korean') {
@@ -1286,10 +1298,10 @@ export function assessTranslationQuality(output, originalText, settings, targetL
     // 🚨 v1.1.2: 병기 모드에서 서술이 영어로 남거나(미번역) 영어+한국어 이중 출력되면
     // 따옴표 밖 영단어가 급증 → 감지해 재시도 (고유명사 몇 개로는 문턱 미달)
     if (dialogueBilingual && targetLang === 'Korean') {
-        const outsideQuotes = natural.replace(/"[^"]*"/g, '').replace(/「[^」]*」/g, '').replace(/『[^』]*』/g, '');
-        const engWordsOutside = (outsideQuotes.match(/\b[a-zA-Z]{3,}\b/g) || []).length;
-        if (engWordsOutside > 10) {
-            addIssue(`병기 서술 미번역/이중 출력 의심 (따옴표 밖 영단어 ${engWordsOutside}개)`, 40);
+        // v1.2.0: 병기는 코드 조립 방식 — 모델 출력은 순수 한국어여야 하므로 전체 영단어 검사 (고유명사 여유분 10)
+        const engWordsTotal = (natural.match(/\b[a-zA-Z]{3,}\b/g) || []).length;
+        if (engWordsTotal > 10) {
+            addIssue(`병기 모드 순수 한국어 위반 의심 (영단어 ${engWordsTotal}개 잔존)`, 40);
         }
     }
 

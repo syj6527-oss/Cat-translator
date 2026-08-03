@@ -1199,3 +1199,39 @@ export function stripLiteralDetails(text) {
     if (!text) return text;
     return text.replace(/\s*<details class="cat-literal">[\s\S]*?<\/details>\s*/g, '').trim();
 }
+
+// ============================================================
+// 🚨 v1.2.0: 한영 병기 코드 조립 (Dialogue Bilingual Assembly)
+// 모델에겐 순수 한국어 번역만 요구하고, "영어 [한국어]" 형식은 코드가 기계 조립
+// → 괄호 위치 이탈·서술 이중 출력·서술 미번역이 구조적으로 불가능해짐
+// ============================================================
+export function assembleDialogueBilingual(sourceText, koreanText) {
+    const quoteRe = /"([^"\n]+)"|“([^”\n]+)”/g;
+    const srcQuotes = [];
+    let m;
+    while ((m = quoteRe.exec(String(sourceText || ''))) !== null) {
+        srcQuotes.push(m[1] ?? m[2]);
+    }
+    if (srcQuotes.length === 0) return { ok: false, reason: '원문 대사 없음', text: koreanText };
+
+    const korQuotes = [];
+    quoteRe.lastIndex = 0;
+    while ((m = quoteRe.exec(String(koreanText || ''))) !== null) {
+        korQuotes.push(m[1] ?? m[2]);
+    }
+    if (korQuotes.length !== srcQuotes.length) {
+        return { ok: false, reason: `대사 수 불일치 (원문 ${srcQuotes.length} vs 번역 ${korQuotes.length})`, text: koreanText };
+    }
+
+    // 순서대로 짝지어 번역문의 대사를 "원문대사 [한국어대사]"로 치환
+    let idx = 0;
+    quoteRe.lastIndex = 0;
+    const assembled = String(koreanText).replace(quoteRe, (full, g1, g2) => {
+        const kor = (g1 ?? g2 ?? '').trim();
+        const src = String(srcQuotes[idx++]).trim();
+        // 이미 같은 내용이거나 원문 대사에 실질 문자가 없으면 그대로
+        if (!/[A-Za-z\u3040-\u30ff\u4e00-\u9fff]/.test(src)) return full;
+        return `"${src} [${kor}]"`;
+    });
+    return { ok: true, reason: null, text: assembled };
+}
