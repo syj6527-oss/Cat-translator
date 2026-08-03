@@ -1,7 +1,7 @@
 // ============================================================
-// 🐱 Translator v1.2.5 - ui.js
+// 🐱 Translator v1.2.6 - ui.js
 // ============================================================
-import { catNotify, catNotifyProgress, getThemeEmoji, getCompletionEmoji, getModelTheme, setTextareaValue, resolveInputTranslationDirection, normalizeStyleKey } from './utils.js';
+import { catNotify, catNotifyProgress, getThemeEmoji, getCompletionEmoji, getModelTheme, setTextareaValue, resolveInputTranslationDirection, normalizeStyleKey, normalizeNarrationRegister, normalizeDialogueRegister, resolveRegisterSettings } from './utils.js';
 import { getStats, clearAllCache, exportSettings, importSettings, getHistory, togglePin, deleteHistoryItem } from './cache.js';
 import { fetchTranslation, gatherContextMessages, SYSTEM_SHIELD, STYLE_PRESETS, getLastDebugLog } from './translator.js';
 
@@ -174,6 +174,10 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
                 <div class="cat-setting-row" style="width:80px;"><label>온도</label><input type="number" id="ct-temperature" class="text_pole" value="${settings.temperature || ''}" min="0" max="1" step="0.1" placeholder="0.0~1.0"></div>
             </div>
             <div style="display:flex; gap:8px;">
+                <div class="cat-setting-row" style="flex:1;"><label>서술 말투</label><select id="ct-narration-register" class="text_pole"><option value="declarative">-다체</option><option value="polite">성인 존댓말</option></select></div>
+                <div class="cat-setting-row" style="flex:1;"><label>대사 말투</label><select id="ct-dialogue-register" class="text_pole"><option value="context">맥락 유지</option><option value="polite">존댓말</option><option value="informal">반말</option></select></div>
+            </div>
+            <div style="display:flex; gap:8px;">
                 <div class="cat-setting-row" style="flex:1;"><label>토큰</label><input type="number" id="ct-max-tokens" class="text_pole" value="${settings.maxTokens || ''}" min="256" max="20000" step="256" placeholder="권장 8192"></div>
                 <div class="cat-setting-row" style="width:100px;"><label>문맥 범위</label><input type="number" id="ct-context-range" class="text_pole" value="${settings.contextRange || ''}" min="0" max="6" step="1" placeholder="최대 6"></div>
             </div>
@@ -213,7 +217,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
                     <span>추가 지시사항</span>
                     <span style="display:inline-flex; gap:4px; align-items:center;">
                         <select id="ct-prompt-preset" class="text_pole" style="width:auto; min-width:80px; font-size:0.85em; padding:2px 4px;"><option value="">없음</option></select>
-                        <span id="ct-prompt-save" style="cursor:pointer; font-size:1.2em;" title="현재 지시사항 + 온도를 프롬프트로 저장">💾</span>
+                        <span id="ct-prompt-save" style="cursor:pointer; font-size:1.2em;" title="현재 지시사항 + 스타일 + 말투 + 온도를 프롬프트로 저장">💾</span>
                         <span id="ct-prompt-delete" style="cursor:pointer; font-size:1.2em;" title="선택한 프롬프트 삭제">🗑️</span>
                         <span id="ct-prompt-link" style="cursor:pointer; font-size:1.2em;" title="현재 캐릭터에 프롬프트 연결">🔗</span>
                     </span>
@@ -266,7 +270,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
     };
     
     // 모든 설정 필드에 자동 저장 연결
-    $('#ct-profile, #ct-auto-mode, #ct-bidirectional, #ct-dialogue-bilingual, #ct-literal-bilingual, #ct-lang, #ct-style, #ct-temperature, #ct-max-tokens, #ct-context-range, #ct-retranslate-strength, #ct-after-edit, #ct-preview-cleanup').on('change', autoSave);
+    $('#ct-profile, #ct-auto-mode, #ct-bidirectional, #ct-dialogue-bilingual, #ct-literal-bilingual, #ct-lang, #ct-style, #ct-narration-register, #ct-dialogue-register, #ct-temperature, #ct-max-tokens, #ct-context-range, #ct-retranslate-strength, #ct-after-edit, #ct-preview-cleanup').on('change', autoSave);
     $('#ct-key, #ct-model-custom, #ct-user-prompt, #ct-dictionary').on('input', autoSave);
     
     $('#ct-model').val(settings.directModel).on('change', function () {
@@ -306,6 +310,8 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
         }
     });
     $('#ct-style').val(normalizeStyleKey(settings.style)).on('change', function () { if (_suppressAutoSave) return; const preset = STYLE_PRESETS[$(this).val()]; if (preset) $('#ct-temperature').val(preset.temperature); });
+    $('#ct-narration-register').val(normalizeNarrationRegister(settings.narrationRegister));
+    $('#ct-dialogue-register').val(normalizeDialogueRegister(settings.dialogueRegister));
     $('#ct-auto-mode').val(settings.autoMode); $('#ct-bidirectional').val(settings.bidirectional || 'off'); $('#ct-dialogue-bilingual').val(settings.dialogueBilingual || 'off'); $('#ct-literal-bilingual').val(settings.literalBilingual || 'off'); $('#ct-lang').val(settings.targetLang); $('#ct-temperature').val(settings.temperature || 0.3);
     
     // 대사 병기 변경 시 알림
@@ -360,13 +366,18 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
         if (!name) return;
         const preset = settings.promptPresets?.[name];
         if (preset) {
+            const presetRegisters = resolveRegisterSettings(preset);
             _suppressAutoSave = true;  // 🚨 로드 중 autoSave/스타일핸들러 차단
             clearTimeout(_autoSaveTimer);
             settings.userPrompt = preset.prompt || '';
             settings.temperature = preset.temperature ?? 0.3;
-            settings.style = normalizeStyleKey(preset.style);
+            settings.style = presetRegisters.style;
+            settings.narrationRegister = presetRegisters.narrationRegister;
+            settings.dialogueRegister = presetRegisters.dialogueRegister;
             $('#ct-user-prompt').val(settings.userPrompt);
             $('#ct-style').val(settings.style);
+            $('#ct-narration-register').val(settings.narrationRegister);
+            $('#ct-dialogue-register').val(settings.dialogueRegister);
             $('#ct-temperature').val(settings.temperature);
             _suppressAutoSave = false;
             saveSettingsFn();
@@ -381,7 +392,13 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
         const name = prompt('프롬프트 이름을 입력하세요:', $('#ct-prompt-preset').val() || '');
         if (!name || !name.trim()) return;
         if (!settings.promptPresets) settings.promptPresets = {};
-        settings.promptPresets[name.trim()] = { prompt: currentPrompt, temperature: parseFloat($('#ct-temperature').val()) || 0.3, style: $('#ct-style').val() || 'normal' };
+        settings.promptPresets[name.trim()] = {
+            prompt: currentPrompt,
+            temperature: parseFloat($('#ct-temperature').val()) || 0.3,
+            style: normalizeStyleKey($('#ct-style').val()),
+            narrationRegister: normalizeNarrationRegister($('#ct-narration-register').val()),
+            dialogueRegister: normalizeDialogueRegister($('#ct-dialogue-register').val())
+        };
         _rebuildPresetDropdown();
         $('#ct-prompt-preset').val(name.trim());
         saveSettingsFn();
@@ -499,7 +516,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
         if (!confirm('모든 설정을 초기값으로 되돌리시겠습니까?')) return;
         $('#ct-profile').val(''); $('#ct-key').val('');
         $('#ct-model').val('gemini-2.5-flash'); $('#ct-model-custom').val('').hide();
-        $('#ct-auto-mode').val('none'); $('#ct-bidirectional').val('off'); $('#ct-dialogue-bilingual').val('off'); $('#ct-literal-bilingual').val('off'); $('#ct-icon-visibility').val('all'); $('#ct-lang').val('Korean'); $('#ct-style').val('normal'); $('#ct-retranslate-strength').val('normal'); $('#ct-after-edit').val('notify'); $('#ct-preview-cleanup').val('off');
+        $('#ct-auto-mode').val('none'); $('#ct-bidirectional').val('off'); $('#ct-dialogue-bilingual').val('off'); $('#ct-literal-bilingual').val('off'); $('#ct-icon-visibility').val('all'); $('#ct-lang').val('Korean'); $('#ct-style').val('normal'); $('#ct-narration-register').val('declarative'); $('#ct-dialogue-register').val('context'); $('#ct-retranslate-strength').val('normal'); $('#ct-after-edit').val('notify'); $('#ct-preview-cleanup').val('off');
         $('#ct-temperature').val(0.3); $('#ct-max-tokens').val(8192); $('#ct-context-range').val(1);
         $('#ct-user-prompt').val(''); $('#ct-dictionary').val(''); $('#ct-dict-reset').text('📭');
         settings.promptPresets = {}; settings.charPresetMap = {}; $('#ct-prompt-preset').val('').find('option:not(:first)').remove();
@@ -547,6 +564,8 @@ export function collectSettings() {
         customModelName: $('#ct-model-custom').val() || _settingsRef?.customModelName || '', autoMode: $('#ct-auto-mode').val() || _settingsRef?.autoMode || 'none',
         bidirectional: $('#ct-bidirectional').val() || _settingsRef?.bidirectional || 'off', dialogueBilingual: $('#ct-dialogue-bilingual').val() || _settingsRef?.dialogueBilingual || 'off', literalBilingual: $('#ct-literal-bilingual').val() || _settingsRef?.literalBilingual || 'off', iconVisibility: $('#ct-icon-visibility').val() || _settingsRef?.iconVisibility || 'all',
         targetLang: $('#ct-lang').val() || _settingsRef?.targetLang || 'Korean', style: normalizeStyleKey($('#ct-style').val() || _settingsRef?.style),
+        narrationRegister: normalizeNarrationRegister($('#ct-narration-register').val() || _settingsRef?.narrationRegister),
+        dialogueRegister: normalizeDialogueRegister($('#ct-dialogue-register').val() || _settingsRef?.dialogueRegister),
         temperature: parseFloat($('#ct-temperature').val()) || _settingsRef?.temperature || 0.3, maxTokens: parseInt($('#ct-max-tokens').val()) || _settingsRef?.maxTokens || 8192,
         contextRange: Math.min(6, Math.max(0, parseInt($('#ct-context-range').val()) || _settingsRef?.contextRange || 1)),
         userPrompt: safePromptValue, dictionary: safeDictValue,

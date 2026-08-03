@@ -1,8 +1,8 @@
 // ============================================================
-// 🐱 Translator v1.2.5
+// 🐱 Translator v1.2.6
 // ============================================================
 import { extension_settings, getContext } from '../../../../scripts/extensions.js';
-import { catNotify, getThemeEmoji, getCompletionEmoji, setTextareaValue, getModelTheme, detectLanguageDirection, getCacheModelKey, buildLiteralDetailsHtml, stripLiteralDetails, analyzeLanguage, isClearlyLanguage, resolveInputTranslationDirection, normalizeStyleKey } from './utils.js';
+import { catNotify, getThemeEmoji, getCompletionEmoji, setTextareaValue, getModelTheme, detectLanguageDirection, getCacheModelKey, buildLiteralDetailsHtml, stripLiteralDetails, analyzeLanguage, isClearlyLanguage, resolveInputTranslationDirection, resolveRegisterSettings, shouldUpdateGlobalBaseline } from './utils.js';
 import { initCache, deleteCached } from './cache.js';
 import { fetchTranslation, gatherContextMessages } from './translator.js';
 import { setupSettingsPanel, collectSettings, updateCacheStats, injectMessageButtons, injectInputButtons, setupDragDictionary, setupMutationObserver, showHistoryPopup, applyTheme, setSuppressAutoSave, clearPendingAutoSave, abortBulkTranslation, isTranslatedEditActive, markTranslatedEditSave, clearTranslatedEditSessions } from './ui.js';
@@ -10,16 +10,23 @@ import { setupSettingsPanel, collectSettings, updateCacheStats, injectMessageBut
 const EXT_NAME = "cat-translator";
 const stContext = getContext();
 
-const defaultSettings = { profile: '', customKey: '', vertexKey: '', vertexProject: '', vertexRegion: 'global', directModel: 'gemini-2.5-flash', customModelName: '', autoMode: 'none', bidirectional: 'off', dialogueBilingual: 'off', literalBilingual: 'off', iconVisibility: 'all', targetLang: 'Korean', style: 'normal', temperature: 0.3, maxTokens: 8192, contextRange: 1, userPrompt: '', dictionary: '', retranslateStrength: 'normal', afterEditMode: 'notify', previewTranslate: 'off', previewCleanup: 'off', promptPresets: {}, charPresetMap: {} };
+const defaultSettings = { profile: '', customKey: '', vertexKey: '', vertexProject: '', vertexRegion: 'global', directModel: 'gemini-2.5-flash', customModelName: '', autoMode: 'none', bidirectional: 'off', dialogueBilingual: 'off', literalBilingual: 'off', iconVisibility: 'all', targetLang: 'Korean', style: 'normal', narrationRegister: 'declarative', dialogueRegister: 'context', temperature: 0.3, maxTokens: 8192, contextRange: 1, userPrompt: '', dictionary: '', retranslateStrength: 'normal', afterEditMode: 'notify', previewTranslate: 'off', previewCleanup: 'off', promptPresets: {}, charPresetMap: {} };
 // 정식판 설정은 첫 베타 실행 때만 한 방향으로 복사한다. 이후 두 설정은 독립적이다.
 if (!extension_settings[EXT_NAME] && extension_settings["cat-translator"]) {
     extension_settings[EXT_NAME] = JSON.parse(JSON.stringify(extension_settings["cat-translator"]));
 }
-let settings = Object.assign({}, defaultSettings, extension_settings[EXT_NAME]);
-settings.style = normalizeStyleKey(settings.style);
-if (settings._baseline) settings._baseline.style = normalizeStyleKey(settings._baseline.style);
+const storedSettings = extension_settings[EXT_NAME] || {};
+let settings = Object.assign({}, defaultSettings, storedSettings);
+function migrateRegisterSettings(target) {
+    if (!target) return target;
+    Object.assign(target, resolveRegisterSettings(target));
+    return target;
+}
+// 기본값을 합치기 전의 저장 객체를 기준으로 구버전 결합형 style을 판독한다.
+Object.assign(settings, resolveRegisterSettings(storedSettings));
+if (settings._baseline) migrateRegisterSettings(settings._baseline);
 Object.values(settings.promptPresets || {}).forEach(preset => {
-    if (preset) preset.style = normalizeStyleKey(preset.style);
+    migrateRegisterSettings(preset);
 });
 
 let _chatSaveTimer = null;
@@ -188,17 +195,26 @@ function repairAssistantMessageState(msg, msgId, source = '') {
 
 // 🚨 전역 기준값 영구 보존: extension_settings에 별도 키로 저장
 // 프리셋이 적용된 상태에서 새로고침해도 baseline이 오염되지 않음
-const BASELINE_VERSION = 2;  // 🚨 baseline 구조 변경 시 올려서 강제 리셋
+const BASELINE_VERSION = 3;
 const _savedBaseline = extension_settings[EXT_NAME]?._baseline;
-const _baselineValid = _savedBaseline && _savedBaseline._v === BASELINE_VERSION;
-const _globalBaseline = _baselineValid
-    ? { userPrompt: _savedBaseline.userPrompt ?? '', temperature: _savedBaseline.temperature ?? 0.3, style: _savedBaseline.style ?? 'normal', _v: BASELINE_VERSION }
-    : { userPrompt: defaultSettings.userPrompt || '', temperature: defaultSettings.temperature ?? 0.3, style: defaultSettings.style || 'normal', _v: BASELINE_VERSION };
+const _initialChar = (globalThis.SillyTavern?.getContext?.()?.name2) || stContext.name2 || '';
+const _initialPresetActive = !!(_initialChar && settings.charPresetMap?.[_initialChar]);
+// v2는 자동 저장이 baseline을 갱신하지 않던 버그가 있었다. 미연결 채팅에서는
+// 현재 화면의 실제 설정을 우선해 사용자가 마지막으로 고른 값을 살린다.
+const _baselineSource = _savedBaseline?._v === BASELINE_VERSION
+    ? _savedBaseline
+    : (_savedBaseline?._v === 2 && _initialPresetActive ? _savedBaseline : settings);
+const _resolvedBaselineRegisters = resolveRegisterSettings(_baselineSource);
+const _globalBaseline = {
+    userPrompt: _baselineSource?.userPrompt ?? defaultSettings.userPrompt,
+    temperature: _baselineSource?.temperature ?? defaultSettings.temperature,
+    style: _resolvedBaselineRegisters.style,
+    narrationRegister: _resolvedBaselineRegisters.narrationRegister,
+    dialogueRegister: _resolvedBaselineRegisters.dialogueRegister,
+    _v: BASELINE_VERSION
+};
 let _isPresetLoading = false;
-if (!_baselineValid) {
-    console.warn('[CAT] ⚠️ baseline 리셋: 구버전/미존재. "설정 저장 및 적용" 버튼으로 기본 설정을 확정해주세요!');
-}
-console.log('[CAT] 🏠 전역 baseline 초기화:', { style: _globalBaseline.style, temp: _globalBaseline.temperature, prompt: _globalBaseline.userPrompt.substring(0, 30) || '(없음)', source: _baselineValid ? '영구저장 복원' : 'defaultSettings (리셋)' });
+console.log('[CAT] 🏠 전역 baseline 초기화:', { style: _globalBaseline.style, narration: _globalBaseline.narrationRegister, dialogue: _globalBaseline.dialogueRegister, temp: _globalBaseline.temperature, prompt: _globalBaseline.userPrompt.substring(0, 30) || '(없음)', source: _savedBaseline?._v === BASELINE_VERSION ? '영구저장 복원' : '구버전 자동 이관' });
 
 // 🚨 프로필/모델 상태에 따른 올바른 테마 판별
 function getCurrentTheme() {
@@ -236,23 +252,27 @@ function saveSettings(updateBaseline = false) {
     }
     
     Object.assign(settings, collected);
-    // 🚨 baseline 갱신 조건: 수동 저장 + 프리셋 비활성 상태에서만
-    if (updateBaseline) {
-        const currentChar = (SillyTavern?.getContext?.()?.name2) || stContext.name2 || '';
-        const hasCharPreset = !!(currentChar && settings.charPresetMap?.[currentChar]);
-        const hasSelectedPreset = !!$('#ct-prompt-preset').val();
-        if (hasCharPreset || hasSelectedPreset) {
+    const currentChar = (SillyTavern?.getContext?.()?.name2) || stContext.name2 || '';
+    const hasCharPreset = !!(currentChar && settings.charPresetMap?.[currentChar]);
+    const hasSelectedPreset = !!$('#ct-prompt-preset').val();
+    const shouldUpdateGlobal = shouldUpdateGlobalBaseline({
+        hasCharPreset,
+        hasSelectedPreset,
+        isPresetLoading: _isPresetLoading
+    });
+    // 미연결 상태의 자동 저장도 전역 기본값이다. 프리셋 로드/연결 상태만 보호한다.
+    if (shouldUpdateGlobal) {
+        _globalBaseline.userPrompt = settings.userPrompt || '';
+        _globalBaseline.temperature = settings.temperature ?? 0.3;
+        _globalBaseline.style = settings.style || 'normal';
+        _globalBaseline.narrationRegister = settings.narrationRegister || 'declarative';
+        _globalBaseline.dialogueRegister = settings.dialogueRegister || 'context';
+        _globalBaseline._v = BASELINE_VERSION;
+        console.log(`[CAT] 🏠 baseline 갱신 (${updateBaseline ? '수동' : '자동'} 저장):`, { style: _globalBaseline.style, narration: _globalBaseline.narrationRegister, dialogue: _globalBaseline.dialogueRegister, temp: _globalBaseline.temperature, prompt: _globalBaseline.userPrompt.substring(0, 30) || '(없음)' });
+    } else if (updateBaseline && (hasCharPreset || hasSelectedPreset)) {
             // 🚨 프리셋 활성 중 → baseline 보호, 프리셋만 저장
             console.log(`[CAT] 🔒 baseline 보호: 프리셋 활성 상태에서 저장 → baseline 유지`);
             catNotify(`${getThemeEmoji()} 캐릭터 설정 저장됨 (기본 설정은 변경되지 않음)`, "success");
-        } else {
-            // 🚨 프리셋 없음 → 진짜 전역 기본값 갱신
-            _globalBaseline.userPrompt = settings.userPrompt || '';
-            _globalBaseline.temperature = settings.temperature ?? 0.3;
-            _globalBaseline.style = settings.style || 'normal';
-            _globalBaseline._v = BASELINE_VERSION;
-            console.log('[CAT] 🏠 baseline 갱신 (수동 저장):', { style: _globalBaseline.style, temp: _globalBaseline.temperature, prompt: _globalBaseline.userPrompt.substring(0, 30) || '(없음)' });
-        }
     }
     // 🚨 baseline을 extension_settings에 영구 저장 (새로고침 후에도 복원)
     extension_settings[EXT_NAME] = { ...settings, _baseline: { ..._globalBaseline } };
@@ -1295,31 +1315,40 @@ jQuery(async () => {
             const presetName = settings.charPresetMap?.[charName];
             if (presetName && settings.promptPresets?.[presetName]) {
                 const preset = settings.promptPresets[presetName];
+                const presetRegisters = resolveRegisterSettings(preset);
                 settings.userPrompt = preset.prompt || '';
                 settings.temperature = preset.temperature ?? 0.3;
-                settings.style = normalizeStyleKey(preset.style);
+                settings.style = presetRegisters.style;
+                settings.narrationRegister = presetRegisters.narrationRegister;
+                settings.dialogueRegister = presetRegisters.dialogueRegister;
                 $('#ct-user-prompt').val(settings.userPrompt);
                 $('#ct-style').val(settings.style);
+                $('#ct-narration-register').val(settings.narrationRegister);
+                $('#ct-dialogue-register').val(settings.dialogueRegister);
                 $('#ct-temperature').val(settings.temperature);
                 $('#ct-prompt-preset').val(presetName);
                 // 🚨 직접 저장 (autoSave 디바운스 충돌 방지) + baseline 영구 보존
                 extension_settings[EXT_NAME] = { ...settings, _baseline: { ..._globalBaseline } };
                 stContext.saveSettingsDebounced();
                 catNotify(`${getThemeEmoji()} ${charName} → 프롬프트 "${presetName}" 자동 로드!`, "success");
-                console.log(`[CAT] 🔗 프리셋 적용: "${presetName}" →`, { style: settings.style, temp: settings.temperature, prompt: settings.userPrompt.substring(0, 30) });
+                console.log(`[CAT] 🔗 프리셋 적용: "${presetName}" →`, { style: settings.style, narration: settings.narrationRegister, dialogue: settings.dialogueRegister, temp: settings.temperature, prompt: settings.userPrompt.substring(0, 30) });
             } else {
                 // 🚨 FIX: 매핑 없는 캐릭터 → 전역 baseline으로 복원 (하드코딩 기본값 X)
                 settings.userPrompt = _globalBaseline.userPrompt;
                 settings.temperature = _globalBaseline.temperature;
                 settings.style = _globalBaseline.style;
+                settings.narrationRegister = _globalBaseline.narrationRegister;
+                settings.dialogueRegister = _globalBaseline.dialogueRegister;
                 $('#ct-user-prompt').val(settings.userPrompt);
                 $('#ct-style').val(settings.style);
+                $('#ct-narration-register').val(settings.narrationRegister);
+                $('#ct-dialogue-register').val(settings.dialogueRegister);
                 $('#ct-temperature').val(settings.temperature);
                 $('#ct-prompt-preset').val('');
                 // 🚨 직접 저장 + baseline 영구 보존
                 extension_settings[EXT_NAME] = { ...settings, _baseline: { ..._globalBaseline } };
                 stContext.saveSettingsDebounced();
-                console.log(`[CAT] 🏠 baseline 복원 (프리셋 없음):`, { style: _globalBaseline.style, temp: _globalBaseline.temperature, prompt: _globalBaseline.userPrompt.substring(0, 30) || '(없음)' });
+                console.log(`[CAT] 🏠 baseline 복원 (프리셋 없음):`, { style: _globalBaseline.style, narration: _globalBaseline.narrationRegister, dialogue: _globalBaseline.dialogueRegister, temp: _globalBaseline.temperature, prompt: _globalBaseline.userPrompt.substring(0, 30) || '(없음)' });
             }
             
             // 🚨 프리셋 로드 완료: 억제 OFF
@@ -1327,7 +1356,7 @@ jQuery(async () => {
             setSuppressAutoSave(false);
         }, 500);
     });
-    console.log('[CAT] 🐱 Translator v1.2.5 로드 완료!');
+    console.log('[CAT] 🐱 Translator v1.2.6 로드 완료!');
     
     // 🚨 페이지 가시성 변경 시 60초 이상 stuck 글로우 정리 (모바일 백그라운드 복귀 대응)
     document.addEventListener('visibilitychange', () => {

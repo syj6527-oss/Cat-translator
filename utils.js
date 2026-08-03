@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Translator v1.1.0 - utils.js
+// 🐱 Translator v1.2.6 - utils.js
 // 유틸리티: 알림, 정규식 세탁기, HTML/CSS 방어, 언어 감지
 // ============================================================
 
@@ -831,14 +831,17 @@ export function getCacheModelKey(settings) {
     
     const dialogueMode = settings.dialogueBilingual || 'off';
     const literalMode = settings.literalBilingual === 'on' ? 'on' : 'off';
-    const style = normalizeStyleKey(settings.style);
+    const registerSettings = resolveRegisterSettings(settings);
+    const style = registerSettings.style;
     const temperature = Number.isFinite(Number(settings.temperature)) ? Number(settings.temperature) : 0.3;
     const promptHash = hashCacheSetting(settings.userPrompt || '');
     const dictionaryHash = hashCacheSetting(settings.dictionary || '');
     const contextRange = Number.isFinite(Number(settings.contextRange)) ? Number(settings.contextRange) : 1;
     
-    return `${key}::cache-v4::dialogue:${dialogueMode}::literal:${literalMode}` +
-        `::style:${style}::temp:${temperature}::context:${contextRange}` +
+    return `${key}::cache-v5::dialogue:${dialogueMode}::literal:${literalMode}` +
+        `::style:${style}::narration:${registerSettings.narrationRegister}` +
+        `::dialogue-register:${registerSettings.dialogueRegister}` +
+        `::temp:${temperature}::context:${contextRange}` +
         `::prompt:${promptHash}::dict:${dictionaryHash}`;
 }
 
@@ -847,11 +850,7 @@ const TRANSLATION_STYLE_ALIASES = {
     informal: 'informal_all'
 };
 
-const TRANSLATION_STYLE_KEYS = new Set([
-    'normal', 'novel', 'casual', 'natural', 'literary',
-    'formal_narration', 'formal_all',
-    'informal_narration', 'informal_all'
-]);
+const TRANSLATION_STYLE_KEYS = new Set(['normal', 'novel', 'casual', 'natural', 'literary']);
 
 const STYLE_REGISTER_POLICIES = {
     formal_narration: { narration: 'polite', dialogue: 'context' },
@@ -861,16 +860,53 @@ const STYLE_REGISTER_POLICIES = {
 };
 
 export function normalizeStyleKey(style = 'normal') {
-    const normalized = TRANSLATION_STYLE_ALIASES[String(style || 'normal')] || String(style || 'normal');
-    return TRANSLATION_STYLE_KEYS.has(normalized) ? normalized : 'normal';
+    return resolveRegisterSettings({ style }).style;
 }
 
-export function getStyleRegisterPolicy(style = 'normal') {
-    const key = normalizeStyleKey(style);
+export function normalizeNarrationRegister(value = 'declarative') {
+    return value === 'polite' ? 'polite' : 'declarative';
+}
+
+export function normalizeDialogueRegister(value = 'context') {
+    return value === 'polite' || value === 'informal' ? value : 'context';
+}
+
+/**
+ * v1.2.5 이하의 결합형 style 값을 일반 스타일 + 독립 존비어 설정으로 이관한다.
+ * 명시적인 새 설정이 있으면 구버전 style보다 우선한다.
+ */
+export function resolveRegisterSettings(settingsOrStyle = {}) {
+    const source = typeof settingsOrStyle === 'object' && settingsOrStyle !== null
+        ? settingsOrStyle
+        : { style: settingsOrStyle };
+    const rawStyle = TRANSLATION_STYLE_ALIASES[String(source.style || 'normal')] || String(source.style || 'normal');
+    const legacyPolicy = STYLE_REGISTER_POLICIES[rawStyle] || {};
     return {
-        key,
-        ...(STYLE_REGISTER_POLICIES[key] || { narration: 'declarative', dialogue: 'context' })
+        style: TRANSLATION_STYLE_KEYS.has(rawStyle) ? rawStyle : 'normal',
+        narrationRegister: normalizeNarrationRegister(
+            source.narrationRegister ?? legacyPolicy.narration ?? 'declarative'
+        ),
+        dialogueRegister: normalizeDialogueRegister(
+            source.dialogueRegister ?? legacyPolicy.dialogue ?? 'context'
+        )
     };
+}
+
+export function getStyleRegisterPolicy(settingsOrStyle = {}) {
+    const resolved = resolveRegisterSettings(settingsOrStyle);
+    return {
+        key: resolved.style,
+        narration: resolved.narrationRegister,
+        dialogue: resolved.dialogueRegister
+    };
+}
+
+export function shouldUpdateGlobalBaseline({
+    hasCharPreset = false,
+    hasSelectedPreset = false,
+    isPresetLoading = false
+} = {}) {
+    return !hasCharPreset && !hasSelectedPreset && !isPresetLoading;
 }
 
 function countKoreanRegisterEndings(text) {
@@ -885,8 +921,8 @@ function countKoreanRegisterEndings(text) {
     return { polite, declarative, informal: declarative + conversational };
 }
 
-export function analyzeKoreanRegisterConsistency(text, style = 'normal') {
-    const policy = getStyleRegisterPolicy(style);
+export function analyzeKoreanRegisterConsistency(text, settingsOrStyle = {}) {
+    const policy = getStyleRegisterPolicy(settingsOrStyle);
     const prose = String(text || '')
         .replace(/```[\s\S]*?```/g, ' ')
         .replace(/<!--[\s\S]*?-->/g, ' ')
