@@ -1,34 +1,23 @@
 // ============================================================
-// 🐱 Translator v1.2.12
+// 🐱 Translator v1.1.0
 // ============================================================
 import { extension_settings, getContext } from '../../../../scripts/extensions.js';
-import { catNotify, getThemeEmoji, getCompletionEmoji, setTextareaValue, getModelTheme, detectLanguageDirection, getCacheModelKey, buildLiteralDetailsHtml, stripLiteralDetails, analyzeLanguage, isClearlyLanguage, resolveInputTranslationDirection, resolveRegisterSettings, shouldUpdateGlobalBaseline } from './utils.js';
-import { initCache, getCachedLatest } from './cache.js';
+import { catNotify, getThemeEmoji, getCompletionEmoji, setTextareaValue, getModelTheme, detectLanguageDirection, getCacheModelKey, buildLiteralDetailsHtml, stripLiteralDetails, analyzeLanguage, isClearlyLanguage, resolveInputTranslationDirection } from './utils.js';
+import { initCache, deleteCached } from './cache.js';
 import { fetchTranslation, gatherContextMessages } from './translator.js';
 import { setupSettingsPanel, collectSettings, updateCacheStats, injectMessageButtons, injectInputButtons, setupDragDictionary, setupMutationObserver, showHistoryPopup, applyTheme, setSuppressAutoSave, clearPendingAutoSave, abortBulkTranslation, isTranslatedEditActive, markTranslatedEditSave, clearTranslatedEditSessions } from './ui.js';
 
 const EXT_NAME = "cat-translator";
 const stContext = getContext();
 
-const defaultSettings = { profile: '', customKey: '', vertexKey: '', vertexProject: '', vertexRegion: 'global', directModel: 'gemini-2.5-flash', customModelName: '', autoMode: 'none', bidirectional: 'off', dialogueBilingual: 'off', literalBilingual: 'off', iconVisibility: 'all', targetLang: 'Korean', style: 'normal', narrationRegister: 'declarative', dialogueRegister: 'context', temperature: 0.3, maxTokens: 8192, contextRange: 1, userPrompt: '', dictionary: '', retranslateStrength: 'normal', afterEditMode: 'notify', previewTranslate: 'off', previewCleanup: 'off', promptPresets: {}, charPresetMap: {} };
+const defaultSettings = { profile: '', customKey: '', vertexKey: '', vertexProject: '', vertexRegion: 'global', directModel: 'gemini-2.5-flash', customModelName: '', autoMode: 'none', bidirectional: 'off', dialogueBilingual: 'off', literalBilingual: 'off', iconVisibility: 'all', targetLang: 'Korean', style: 'normal', temperature: 0.3, maxTokens: 8192, contextRange: 1, userPrompt: '', dictionary: '', retranslateStrength: 'normal', afterEditMode: 'notify', previewTranslate: 'off', previewCleanup: 'off', promptPresets: {}, charPresetMap: {} };
 // 정식판 설정은 첫 베타 실행 때만 한 방향으로 복사한다. 이후 두 설정은 독립적이다.
 if (!extension_settings[EXT_NAME] && extension_settings["cat-translator"]) {
     extension_settings[EXT_NAME] = JSON.parse(JSON.stringify(extension_settings["cat-translator"]));
 }
-const storedSettings = extension_settings[EXT_NAME] || {};
-let settings = Object.assign({}, defaultSettings, storedSettings);
-function migrateRegisterSettings(target) {
-    if (!target) return target;
-    Object.assign(target, resolveRegisterSettings(target));
-    return target;
-}
-// 기본값을 합치기 전의 저장 객체를 기준으로 구버전 결합형 style을 판독한다.
-Object.assign(settings, resolveRegisterSettings(storedSettings));
-if (settings._baseline) migrateRegisterSettings(settings._baseline);
-Object.values(settings.promptPresets || {}).forEach(preset => {
-    migrateRegisterSettings(preset);
-});
+let settings = Object.assign({}, defaultSettings, extension_settings[EXT_NAME]);
 
+let _chatSaveTimer = null;
 const _translationApplyTokens = new Map();
 
 function getLiveContext() {
@@ -40,124 +29,31 @@ function getLiveChat() {
 }
 
 function scheduleChatSave(reason = '') {
-    try {
-        // display_text를 반영한 즉시 saveChat을 호출한다.
-        // 채팅 전환 이벤트가 오기 전에 저장을 시작해 예약 취소로 인한 유실을 막는다.
-        const pending = getLiveContext()?.saveChat?.();
-        if (pending?.then) {
-            pending
-                .then(() => {
-                    if (reason) console.log(`[CAT] 💾 번역 상태 저장 완료 (${reason})`);
-                })
-                .catch(e => console.warn('[CAT] 채팅 저장 실패:', e));
-        } else if (reason) {
-            console.log(`[CAT] 💾 번역 상태 저장 요청 (${reason})`);
+    const scheduledContext = getLiveContext();
+    const scheduledChat = scheduledContext?.chat;
+    clearTimeout(_chatSaveTimer);
+    _chatSaveTimer = setTimeout(() => {
+        _chatSaveTimer = null;
+        try {
+            const ctx = getLiveContext();
+            if (!scheduledChat || ctx?.chat !== scheduledChat) {
+                console.warn(`[CAT] ⏭️ 채팅 전환으로 이전 저장 예약 취소 (${reason || 'unknown'})`);
+                return;
+            }
+            const pending = ctx?.saveChat?.();
+            if (pending?.catch) pending.catch(e => console.warn('[CAT] 채팅 저장 실패:', e));
+            if (reason) console.log(`[CAT] 💾 번역 상태 저장 예약 완료 (${reason})`);
+        } catch (e) {
+            console.warn('[CAT] 채팅 저장 실패:', e);
         }
-    } catch (e) {
-        console.warn('[CAT] 채팅 저장 실패:', e);
-    }
+    }, 300);
 }
 
 function cancelPendingTranslationWork(reason = '') {
+    clearTimeout(_chatSaveTimer);
+    _chatSaveTimer = null;
     _translationApplyTokens.clear();
     if (reason) console.log(`[CAT] 🧹 대기 중인 번역 적용 작업 취소 (${reason})`);
-}
-
-function rememberTranslationBackup(msg, sourceText, displayText, translatedText = '') {
-    if (!msg || !sourceText || !displayText) return;
-    if (!msg.extra) msg.extra = {};
-    msg.extra.cat_translation_backup = {
-        original_mes: sourceText,
-        display_text: displayText,
-        translated_text: translatedText || stripLiteralDetails(displayText),
-        swipe_id: msg.swipe_id,
-        updated_at: Date.now()
-    };
-    delete msg.extra.cat_translation_reverted;
-}
-
-async function restoreMissingTranslations(source = '') {
-    const ctx = getLiveContext();
-    const chatRef = ctx?.chat;
-    if (!chatRef) return 0;
-
-    const targetLang = getOutputTargetLanguage();
-    const modelKey = getCacheModelKey(settings);
-    let restored = 0;
-    let backedUp = 0;
-
-    for (let msgId = 0; msgId < chatRef.length; msgId++) {
-        if (getLiveChat() !== chatRef) return restored;
-        const msg = chatRef[msgId];
-        if (!msg || msg.is_user || msg.is_system === true || msg.extra?.cat_translation_reverted) continue;
-
-        if (!msg.extra) msg.extra = {};
-        const currentSwipeData = msg.swipe_id !== undefined
-            ? msg.extra.swipe_translations?.[msg.swipe_id]
-            : null;
-        const currentSwipeText = getCurrentSwipeText(msg);
-        const backup = msg.extra.cat_translation_backup;
-        const backupMatchesSwipe = backup?.swipe_id === undefined ||
-            msg.swipe_id === undefined ||
-            backup.swipe_id === msg.swipe_id;
-        const sourceText = currentSwipeData?.original_mes ||
-            msg.extra.original_mes ||
-            currentSwipeText ||
-            (backupMatchesSwipe ? backup?.original_mes : '') ||
-            msg.mes ||
-            '';
-        if (!sourceText) continue;
-
-        // 기존에 정상 표시 중인 번역도 별도 복구본으로 즉시 보강한다.
-        if (msg.extra.display_text) {
-            if (!backup || backup.original_mes !== sourceText || backup.display_text !== msg.extra.display_text) {
-                rememberTranslationBackup(msg, sourceText, msg.extra.display_text, stripLiteralDetails(msg.extra.display_text));
-                backedUp++;
-            }
-            continue;
-        }
-
-        let displayText = '';
-        let translatedText = '';
-        if (currentSwipeData?.display_text && currentSwipeData.original_mes === sourceText) {
-            displayText = currentSwipeData.display_text;
-            translatedText = stripLiteralDetails(displayText);
-        } else if (backupMatchesSwipe && backup?.display_text && backup.original_mes === sourceText) {
-            displayText = backup.display_text;
-            translatedText = backup.translated_text || stripLiteralDetails(displayText);
-        } else if (!isClearlyLanguage(analyzeLanguage(sourceText), targetLang)) {
-            const cached = await getCachedLatest(sourceText, targetLang, modelKey, true);
-            if (cached?.translated) {
-                translatedText = cached.translated;
-                displayText = cached.literal
-                    ? `${cached.translated}\n\n${buildLiteralDetailsHtml(cached.literal, sourceText)}`
-                    : cached.translated;
-            }
-        }
-
-        if (!displayText || displayText === sourceText) continue;
-        msg.extra.original_mes = sourceText;
-        msg.extra.display_text = displayText;
-        msg.mes = sourceText;
-        if (msg.swipe_id !== undefined) {
-            msg.extra.cat_swipe_id = msg.swipe_id;
-            if (!msg.extra.swipe_translations) msg.extra.swipe_translations = {};
-            msg.extra.swipe_translations[msg.swipe_id] = {
-                original_mes: sourceText,
-                display_text: displayText
-            };
-        }
-        rememberTranslationBackup(msg, sourceText, displayText, translatedText);
-        $(`.mes[mesid="${msgId}"]`).attr('data-cat-translated', 'true');
-        ctx.updateMessageBlock(msgId, msg);
-        restored++;
-    }
-
-    if (restored > 0 || backedUp > 0) {
-        console.warn(`[CAT] 🛡️ 번역문 복구 ${restored}개 / 복구본 보강 ${backedUp}개 (${source})`);
-        scheduleChatSave(`translation recovery ${source}`);
-    }
-    return restored;
 }
 
 function scheduleTranslationVerification(msgId, expected) {
@@ -188,7 +84,6 @@ function scheduleTranslationVerification(msgId, expected) {
             current.extra.original_mes = expected.source;
             current.extra.display_text = expected.displayText;
             current.mes = expected.isInput ? expected.translatedText : expected.source;
-            rememberTranslationBackup(current, expected.source, expected.displayText, expected.translatedText);
             console.warn(`[CAT] 🔁 번역 표시 상태 재적용 #${msgId} (${delay}ms)`);
             $(`.mes[mesid="${msgId}"]`).attr('data-cat-translated', 'true');
             liveContext.updateMessageBlock(msgId, current);
@@ -288,27 +183,17 @@ function repairAssistantMessageState(msg, msgId, source = '') {
 
 // 🚨 전역 기준값 영구 보존: extension_settings에 별도 키로 저장
 // 프리셋이 적용된 상태에서 새로고침해도 baseline이 오염되지 않음
-const BASELINE_VERSION = 3;
+const BASELINE_VERSION = 2;  // 🚨 baseline 구조 변경 시 올려서 강제 리셋
 const _savedBaseline = extension_settings[EXT_NAME]?._baseline;
-const _baselineNeedsConfirmation = !_savedBaseline;
-const _initialChar = (globalThis.SillyTavern?.getContext?.()?.name2) || stContext.name2 || '';
-const _initialPresetActive = !!(_initialChar && settings.charPresetMap?.[_initialChar]);
-// v2는 자동 저장이 baseline을 갱신하지 않던 버그가 있었다. 미연결 채팅에서는
-// 현재 화면의 실제 설정을 우선해 사용자가 마지막으로 고른 값을 살린다.
-const _baselineSource = _savedBaseline?._v === BASELINE_VERSION
-    ? _savedBaseline
-    : (_savedBaseline?._v === 2 && _initialPresetActive ? _savedBaseline : settings);
-const _resolvedBaselineRegisters = resolveRegisterSettings(_baselineSource);
-const _globalBaseline = {
-    userPrompt: _baselineSource?.userPrompt ?? defaultSettings.userPrompt,
-    temperature: _baselineSource?.temperature ?? defaultSettings.temperature,
-    style: _resolvedBaselineRegisters.style,
-    narrationRegister: _resolvedBaselineRegisters.narrationRegister,
-    dialogueRegister: _resolvedBaselineRegisters.dialogueRegister,
-    _v: BASELINE_VERSION
-};
+const _baselineValid = _savedBaseline && _savedBaseline._v === BASELINE_VERSION;
+const _globalBaseline = _baselineValid
+    ? { userPrompt: _savedBaseline.userPrompt ?? '', temperature: _savedBaseline.temperature ?? 0.3, style: _savedBaseline.style ?? 'normal', _v: BASELINE_VERSION }
+    : { userPrompt: defaultSettings.userPrompt || '', temperature: defaultSettings.temperature ?? 0.3, style: defaultSettings.style || 'normal', _v: BASELINE_VERSION };
 let _isPresetLoading = false;
-console.log('[CAT] 🏠 전역 baseline 초기화:', { style: _globalBaseline.style, narration: _globalBaseline.narrationRegister, dialogue: _globalBaseline.dialogueRegister, temp: _globalBaseline.temperature, prompt: _globalBaseline.userPrompt.substring(0, 30) || '(없음)', source: _savedBaseline?._v === BASELINE_VERSION ? '영구저장 복원' : '구버전 자동 이관' });
+if (!_baselineValid) {
+    console.warn('[CAT] ⚠️ baseline 리셋: 구버전/미존재. "설정 저장 및 적용" 버튼으로 기본 설정을 확정해주세요!');
+}
+console.log('[CAT] 🏠 전역 baseline 초기화:', { style: _globalBaseline.style, temp: _globalBaseline.temperature, prompt: _globalBaseline.userPrompt.substring(0, 30) || '(없음)', source: _baselineValid ? '영구저장 복원' : 'defaultSettings (리셋)' });
 
 // 🚨 프로필/모델 상태에 따른 올바른 테마 판별
 function getCurrentTheme() {
@@ -346,27 +231,23 @@ function saveSettings(updateBaseline = false) {
     }
     
     Object.assign(settings, collected);
-    const currentChar = (SillyTavern?.getContext?.()?.name2) || stContext.name2 || '';
-    const hasCharPreset = !!(currentChar && settings.charPresetMap?.[currentChar]);
-    const hasSelectedPreset = !!$('#ct-prompt-preset').val();
-    const shouldUpdateGlobal = shouldUpdateGlobalBaseline({
-        hasCharPreset,
-        hasSelectedPreset,
-        isPresetLoading: _isPresetLoading
-    });
-    // 미연결 상태의 자동 저장도 전역 기본값이다. 프리셋 로드/연결 상태만 보호한다.
-    if (shouldUpdateGlobal) {
-        _globalBaseline.userPrompt = settings.userPrompt || '';
-        _globalBaseline.temperature = settings.temperature ?? 0.3;
-        _globalBaseline.style = settings.style || 'normal';
-        _globalBaseline.narrationRegister = settings.narrationRegister || 'declarative';
-        _globalBaseline.dialogueRegister = settings.dialogueRegister || 'context';
-        _globalBaseline._v = BASELINE_VERSION;
-        console.log(`[CAT] 🏠 baseline 갱신 (${updateBaseline ? '수동' : '자동'} 저장):`, { style: _globalBaseline.style, narration: _globalBaseline.narrationRegister, dialogue: _globalBaseline.dialogueRegister, temp: _globalBaseline.temperature, prompt: _globalBaseline.userPrompt.substring(0, 30) || '(없음)' });
-    } else if (updateBaseline && (hasCharPreset || hasSelectedPreset)) {
+    // 🚨 baseline 갱신 조건: 수동 저장 + 프리셋 비활성 상태에서만
+    if (updateBaseline) {
+        const currentChar = (SillyTavern?.getContext?.()?.name2) || stContext.name2 || '';
+        const hasCharPreset = !!(currentChar && settings.charPresetMap?.[currentChar]);
+        const hasSelectedPreset = !!$('#ct-prompt-preset').val();
+        if (hasCharPreset || hasSelectedPreset) {
             // 🚨 프리셋 활성 중 → baseline 보호, 프리셋만 저장
             console.log(`[CAT] 🔒 baseline 보호: 프리셋 활성 상태에서 저장 → baseline 유지`);
             catNotify(`${getThemeEmoji()} 캐릭터 설정 저장됨 (기본 설정은 변경되지 않음)`, "success");
+        } else {
+            // 🚨 프리셋 없음 → 진짜 전역 기본값 갱신
+            _globalBaseline.userPrompt = settings.userPrompt || '';
+            _globalBaseline.temperature = settings.temperature ?? 0.3;
+            _globalBaseline.style = settings.style || 'normal';
+            _globalBaseline._v = BASELINE_VERSION;
+            console.log('[CAT] 🏠 baseline 갱신 (수동 저장):', { style: _globalBaseline.style, temp: _globalBaseline.temperature, prompt: _globalBaseline.userPrompt.substring(0, 30) || '(없음)' });
+        }
     }
     // 🚨 baseline을 extension_settings에 영구 저장 (새로고침 후에도 복원)
     extension_settings[EXT_NAME] = { ...settings, _baseline: { ..._globalBaseline } };
@@ -427,7 +308,8 @@ async function processMessage(id, isInput = false, abortSignal = null, silent = 
             mesBlock.attr('data-cat-translated', 'true');
         } else {
             if (currentSwipeData && !currentDataMatchesSource) {
-                console.warn(`[CAT] ⚠️ 스와이프 #${msg.swipe_id} 원문 불일치 번역 보존 후 무시 #${msgId}`);
+                console.warn(`[CAT] 🧹 스와이프 #${msg.swipe_id} 원문 불일치 캐시 무시 #${msgId}`);
+                delete msg.extra.swipe_translations[msg.swipe_id];
             }
             // 현재 swipe 첫 방문 → 번역 데이터 초기화 (다시 번역 가능 상태)
             delete msg.extra.original_mes;
@@ -588,7 +470,6 @@ async function processMessage(id, isInput = false, abortSignal = null, silent = 
                         freshMsg.extra.cat_prev_display = freshMsg.extra.display_text;
                     }
                     freshMsg.extra.display_text = selectedText;
-                    rememberTranslationBackup(freshMsg, textToTranslate, selectedText, stripLiteralDetails(selectedText));
                     if (isInput) freshMsg.mes = selectedText;
                     else freshMsg.mes = textToTranslate;
                     if (freshMsg.swipe_id !== undefined) {
@@ -655,7 +536,7 @@ async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTran
     const requestToken = `request:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
     _translationApplyTokens.set(msgId, requestToken);
 
-    let result = await fetchTranslation(textToTranslate, translationSettings, stContext, {
+    const result = await fetchTranslation(textToTranslate, translationSettings, stContext, {
         forceLang,
         prevTranslation: isInput ? (requestMsg.extra?.original_mes ? requestMsg.mes : null) : prevTranslation,
         contextMessages: contextMsgs,
@@ -663,32 +544,6 @@ async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTran
         silent,
         forceFresh
     });
-
-    const previousInputTranslation = isInput && prevTranslation
-        ? stripLiteralDetails(prevTranslation).trim()
-        : '';
-    if (previousInputTranslation && result?.text?.trim() === previousInputTranslation) {
-        catNotify(`${getThemeEmoji()} 같은 번역이 나와 다른 표현으로 한 번 더 시도해요.`, "info");
-        const retrySettings = {
-            ...translationSettings,
-            retranslateStrength: 'strong',
-            temperature: Math.min((parseFloat(translationSettings.temperature) || 0.3) + 0.4, 1.0)
-        };
-        result = await fetchTranslation(textToTranslate, retrySettings, stContext, {
-            forceLang,
-            prevTranslation: previousInputTranslation,
-            contextMessages: contextMsgs,
-            abortSignal,
-            silent,
-            forceFresh: true
-        });
-    }
-
-    if (previousInputTranslation && result?.text?.trim() === previousInputTranslation) {
-        _translationApplyTokens.delete(msgId);
-        catNotify(`${getThemeEmoji()} 모델이 같은 번역을 반복해서 기존 번역을 유지했어요.`, "warning");
-        return;
-    }
 
     if (_translationApplyTokens.get(msgId) !== requestToken) {
         console.warn(`[CAT] ⏭️ 취소되거나 교체된 번역 결과 폐기 #${msgId}`);
@@ -743,7 +598,6 @@ async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTran
             delete freshMsg.extra.cat_literal;
         }
         freshMsg.extra.display_text = displayWithLiteral;
-        rememberTranslationBackup(freshMsg, textToTranslate, displayWithLiteral, result.text);
         if (freshMsg.swipe_id !== undefined) {
             freshMsg.extra.cat_swipe_id = freshMsg.swipe_id;
             // 🚨 스와이프별 번역 보존 — 다른 스와이프로 전환했다 돌아와도 유지됨
@@ -851,31 +705,6 @@ async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTran
     }
 }
 
-async function retranslateEditedMessage(msgId, newOriginal, expectedChatRef) {
-    if (getLiveChat() !== expectedChatRef) return;
-    const msg = expectedChatRef?.[msgId];
-    if (!msg || msg.extra?.original_mes !== newOriginal) return;
-    const previousDisplay = msg.extra?.display_text || null;
-
-    catNotify(`${getThemeEmoji()} 원문 수정 감지 → 기존 번역을 보존하며 재번역 중...`, 'info');
-    try {
-        await doTranslateMessage(
-            msgId,
-            msg,
-            newOriginal,
-            false,
-            previousDisplay ? stripLiteralDetails(previousDisplay) : null,
-            null,
-            false,
-            true,
-            expectedChatRef
-        );
-    } catch (e) {
-        console.warn(`[CAT] 편집 후 자동 재번역 실패 #${msgId}:`, e);
-        catNotify(`${getThemeEmoji()} 재번역에 실패해 기존 한글 번역을 유지했어요.`, 'warning');
-    }
-}
-
 async function handleEditAreaTranslation(editArea, msgId, abortSignal, isInput = false) {
     const editChatRef = getLiveChat();
     const initialTextareaText = editArea.val().trim();
@@ -942,34 +771,12 @@ async function handleEditAreaTranslation(editArea, msgId, abortSignal, isInput =
     };
     const editRequestToken = `edit:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
     _translationApplyTokens.set(msgId, editRequestToken);
-    let result = await fetchTranslation(sourceText, editSettings, stContext, {
+    const result = await fetchTranslation(sourceText, editSettings, stContext, {
         forceLang: direction.targetLang,
         prevTranslation: prevTrans,
         contextMessages: contextMsgs,
         abortSignal
     });
-
-    if (isInput && isReTranslation && result?.text?.trim() === currentText) {
-        catNotify(`${getThemeEmoji()} 같은 번역이 나와 다른 표현으로 한 번 더 시도해요.`, "info");
-        const retrySettings = {
-            ...editSettings,
-            retranslateStrength: 'strong',
-            temperature: Math.min((parseFloat(editSettings.temperature) || 0.3) + 0.4, 1.0)
-        };
-        result = await fetchTranslation(sourceText, retrySettings, stContext, {
-            forceLang: direction.targetLang,
-            prevTranslation: currentText,
-            contextMessages: contextMsgs,
-            abortSignal,
-            forceFresh: true
-        });
-    }
-
-    if (isInput && isReTranslation && result?.text?.trim() === currentText) {
-        _translationApplyTokens.delete(msgId);
-        catNotify(`${getThemeEmoji()} 모델이 같은 번역을 반복해서 기존 번역을 유지했어요.`, "warning");
-        return;
-    }
 
     if (_translationApplyTokens.get(msgId) !== editRequestToken) {
         console.warn(`[CAT] ⏭️ 취소되거나 교체된 편집 번역 결과 폐기 #${msgId}`);
@@ -1004,7 +811,6 @@ async function handleEditAreaTranslation(editArea, msgId, abortSignal, isInput =
         }
         freshMsg.extra.original_mes = sourceText;
         freshMsg.extra.display_text = result.text;
-        rememberTranslationBackup(freshMsg, sourceText, result.text, result.text);
         if (freshMsg.swipe_id !== undefined) {
             freshMsg.extra.cat_swipe_id = freshMsg.swipe_id;
             if (!freshMsg.extra.swipe_translations) freshMsg.extra.swipe_translations = {};
@@ -1041,9 +847,6 @@ function revertMessage(id) {
         delete msg.extra.swipe_translations[msg.swipe_id];
     }
     if (msg.extra?.cat_swipe_id !== undefined) delete msg.extra.cat_swipe_id;
-    if (msg.extra?.cat_translation_backup) delete msg.extra.cat_translation_backup;
-    if (!msg.extra) msg.extra = {};
-    msg.extra.cat_translation_reverted = true;
     
     // 🚨 Scene Board 확장 호환: sceneBoard.text도 복원
     if (msg.extra?.sceneBoard?.cat_original_text) {
@@ -1133,8 +936,8 @@ jQuery(async () => {
 
     try { await initCache(); console.log('[CAT] 🐱 IndexedDB 캐시 초기화 완료'); } catch (e) { console.warn('[CAT] IndexedDB 초기화 실패, 메모리 캐시로 대체:', e); }
     setupSettingsPanel(settings, stContext, saveSettings); setupDragDictionary(settings, saveSettings); setupMutationObserver(processMessage, revertMessage, settings, stContext);
-    // 🚨 최초 설치로 baseline이 아직 없을 때만 확인 안내
-    if (_baselineNeedsConfirmation) {
+    // 🚨 첫 마이그레이션 / baseline 리셋 안내
+    if (!_baselineValid) {
         setTimeout(() => catNotify(`${getThemeEmoji()} 기본 설정을 확인 후 "설정 저장 및 적용" 버튼을 눌러주세요!`, "warning"), 2000);
     }
     // 🚨 자동 번역: 이미지/시스템/숨김 메시지 스킵 (데이터 기반)
@@ -1154,124 +957,15 @@ jQuery(async () => {
             processMessage(msgId, false, null, false, true);
         }, 500);
     });
-    // 🚨 v1.2.0: 입력 자동번역 이중 구독 — ST 버전에 따라 USER_MESSAGE_RENDERED가
-    // 없거나 발화하지 않는 환경 제보("둘 다 켜도 입력 자동 안 됨") 대응.
-    // MESSAGE_SENT(전송 시 확실히 발화하는 고전 이벤트)도 함께 건다.
-    // 이벤트 수신 즉시 완료 처리하지 않고 실제 번역 성공 시에만 완료로 잠근다.
-    // 첫 이벤트의 예약 작업이 실패해도 USER_MESSAGE_RENDERED/DOM 폴백이 한 번 더 시도할 수 있다.
-    const _inputAutoJobs = new Map();
-    // 🚨 v1.2.1: 입력자동 상태를 📋 디버그에서 볼 수 있게 기록 (모바일 진단용)
-    window._catInputAutoStatus = window._catInputAutoStatus || { ev: '없음 (트리거 기록 없음)', id: -1, ts: 0 };
-    const handleInputAutoCore = (msgId, evName, delay = 500) => {
+    stContext.eventSource.on(stContext.event_types.USER_MESSAGE_RENDERED, (d) => {
         if (settings.autoMode === 'none' || settings.autoMode === 'output') return;
-        if (isNaN(msgId)) { console.warn(`[CAT] ⚠️ 입력 자동: ${evName} msgId 추출 실패`); return; }
-        const id = parseInt(msgId, 10);
-        const now = Date.now();
-        let job = _inputAutoJobs.get(id);
-        const liveChatRef = getLiveChat();
-        const liveMessageRef = liveChatRef?.[id] || null;
-        if (!job || job.chatRef !== liveChatRef ||
-            (liveMessageRef && job.messageRef && job.messageRef !== liveMessageRef)) {
-            job = {
-                chatRef: liveChatRef,
-                messageRef: liveMessageRef,
-                timers: new Set(),
-                inFlight: false,
-                retryRequested: false,
-                attempts: 0,
-                completed: false
-            };
-            _inputAutoJobs.set(id, job);
-        }
-        if (!job.messageRef && liveMessageRef) job.messageRef = liveMessageRef;
-        if (job.completed) return;
-        window._catInputAutoStatus = { ev: evName, id, ts: now };
-        console.log(`[CAT] 🔔 입력 자동 트리거 (${evName}) #${msgId}`);
-        const timer = setTimeout(async () => {
-            job.timers.delete(timer);
-            if (_inputAutoJobs.get(id) !== job || job.completed) return;
-            if (settings.autoMode === 'none' || settings.autoMode === 'output') {
-                _inputAutoJobs.delete(id);
-                return;
-            }
-            if (job.inFlight) {
-                job.retryRequested = true;
-                return;
-            }
-            if (getLiveChat() !== job.chatRef) {
-                _inputAutoJobs.delete(id);
-                return;
-            }
-            const message = job.chatRef?.[id];
-            if (!message || !message.is_user) {
-                if (job.attempts < 2) {
-                    job.attempts++;
-                    handleInputAutoCore(id, `retry:${evName}`, 200);
-                } else {
-                    _inputAutoJobs.delete(id);
-                }
-                return;
-            }
-
-            job.inFlight = true;
-            job.attempts++;
-            try {
-                await processMessage(id, true, null, false, true);
-            } catch (error) {
-                console.error(`[CAT] 입력 자동 처리 실패 #${id}:`, error);
-            } finally {
-                job.inFlight = false;
-                const current = getLiveChat() === job.chatRef ? job.chatRef?.[id] : null;
-                const hasTranslation = !!(current?.extra?.original_mes && current?.extra?.display_text);
-                const direction = current ? resolveInputTranslationDirection(current.mes || '', settings) : null;
-                const completed = hasTranslation || (direction && !direction.shouldTranslate);
-
-                if (completed) {
-                    job.completed = true;
-                    job.retryRequested = false;
-                    setTimeout(() => {
-                        if (_inputAutoJobs.get(id) === job) _inputAutoJobs.delete(id);
-                    }, 5000);
-                } else if (job.retryRequested && job.attempts < 2) {
-                    job.retryRequested = false;
-                    handleInputAutoCore(id, `retry:${evName}`, 250);
-                } else if (job.timers.size === 0) {
-                    _inputAutoJobs.delete(id);
-                }
-            }
-        }, delay);
-        job.timers.add(timer);
-    };
-    const handleInputAuto = (d, evName) => {
-        const msgId = parseInt(typeof d === 'object' ? (d.messageId ?? d.id ?? d.index) : d, 10);
-        handleInputAutoCore(msgId, evName);
-    };
-    // 🚨 v1.2.1: DOM 레벨 폴백 — ST 이벤트가 아예 발화하지 않는 환경 대응.
-    // 전송 버튼 클릭/엔터 전송을 직접 감지해 마지막 유저 메시지를 처리 (dedup이 이벤트와의 중복을 흡수)
-    const scheduleInputAutoFromDom = (srcName) => {
-        if (settings.autoMode === 'none' || settings.autoMode === 'output') return;
+        const msgId = typeof d === 'object' ? d.messageId : d;
+        const renderedChatRef = getLiveChat();
         setTimeout(() => {
-            const chat = getLiveChat();
-            if (!chat || !chat.length) return;
-            // 🚨 v1.2.2: 전송 직후 봇 응답 생성이 시작되면 마지막 메시지가 봇 메시지 —
-            // 끝에서부터 최대 4개 안에서 가장 최근 유저 메시지를 찾아 처리
-            for (let i = chat.length - 1; i >= Math.max(0, chat.length - 4); i--) {
-                if (chat[i]?.is_user) { handleInputAutoCore(i, 'dom:' + srcName); return; }
-            }
-        }, 700);
-    };
-    $(document).on('click.catInputAuto touchend.catInputAuto', '#send_but', () => scheduleInputAutoFromDom('send_but'));
-    $(document).on('keydown.catInputAuto', '#send_textarea', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey && !e.originalEvent?.isComposing) scheduleInputAutoFromDom('enter');
+            if (getLiveChat() !== renderedChatRef) return;
+            processMessage(msgId, true, null, false, true);
+        }, 500);
     });
-    if (stContext.event_types.USER_MESSAGE_RENDERED) {
-        stContext.eventSource.on(stContext.event_types.USER_MESSAGE_RENDERED, (d) => handleInputAuto(d, 'USER_MESSAGE_RENDERED'));
-    } else {
-        console.warn('[CAT] ⚠️ USER_MESSAGE_RENDERED 이벤트 없음 (구버전 ST?) — MESSAGE_SENT로 대체');
-    }
-    if (stContext.event_types.MESSAGE_SENT) {
-        stContext.eventSource.on(stContext.event_types.MESSAGE_SENT, (d) => handleInputAuto(d, 'MESSAGE_SENT'));
-    }
     
     // 🚨 메시지 편집 직접 감지 (옵저버 백업) — afterEditMode 'auto'/'notify' 안전 트리거
     stContext.eventSource.on(stContext.event_types.MESSAGE_EDITED, (msgId) => {
@@ -1382,12 +1076,22 @@ jQuery(async () => {
         msg.extra.original_mes = newOriginal;
         
         if (mode === 'auto') {
-            // API 성공 전에 기존 한글 번역/스와이프 백업을 삭제하지 않는다.
+            delete msg.extra.display_text;
+            delete msg.extra.cat_literal;
+            delete msg.extra.cat_prev_display;
+            if (msg.extra.swipe_translations && msg.swipe_id !== undefined) {
+                delete msg.extra.swipe_translations[msg.swipe_id];
+            }
+            delete msg.extra.cat_swipe_id;
+            $(`.mes[mesid="${id}"]`).removeAttr('data-cat-translated');
             stContext.updateMessageBlock(id, msg);
-            scheduleChatSave(`edited source ${id}`);
+            catNotify(`${getThemeEmoji()} 원문 수정 감지 → 자동 재번역 중...`, "info");
+            const modelKey = getCacheModelKey(settings);
+            const targetLang = detectLanguageDirection(msg.mes, settings).targetLang;
+            deleteCached(msg.mes, targetLang, modelKey);
             setTimeout(() => {
                 if (getLiveChat() !== expectedChatRef) return;
-                retranslateEditedMessage(id, newOriginal, expectedChatRef);
+                processMessage(id, false, null, false, false);
             }, 300);
         }
     }
@@ -1429,40 +1133,31 @@ jQuery(async () => {
             const presetName = settings.charPresetMap?.[charName];
             if (presetName && settings.promptPresets?.[presetName]) {
                 const preset = settings.promptPresets[presetName];
-                const presetRegisters = resolveRegisterSettings(preset);
                 settings.userPrompt = preset.prompt || '';
                 settings.temperature = preset.temperature ?? 0.3;
-                settings.style = presetRegisters.style;
-                settings.narrationRegister = presetRegisters.narrationRegister;
-                settings.dialogueRegister = presetRegisters.dialogueRegister;
+                settings.style = preset.style || 'normal';
                 $('#ct-user-prompt').val(settings.userPrompt);
                 $('#ct-style').val(settings.style);
-                $('#ct-narration-register').val(settings.narrationRegister);
-                $('#ct-dialogue-register').val(settings.dialogueRegister);
                 $('#ct-temperature').val(settings.temperature);
                 $('#ct-prompt-preset').val(presetName);
                 // 🚨 직접 저장 (autoSave 디바운스 충돌 방지) + baseline 영구 보존
                 extension_settings[EXT_NAME] = { ...settings, _baseline: { ..._globalBaseline } };
                 stContext.saveSettingsDebounced();
                 catNotify(`${getThemeEmoji()} ${charName} → 프롬프트 "${presetName}" 자동 로드!`, "success");
-                console.log(`[CAT] 🔗 프리셋 적용: "${presetName}" →`, { style: settings.style, narration: settings.narrationRegister, dialogue: settings.dialogueRegister, temp: settings.temperature, prompt: settings.userPrompt.substring(0, 30) });
+                console.log(`[CAT] 🔗 프리셋 적용: "${presetName}" →`, { style: settings.style, temp: settings.temperature, prompt: settings.userPrompt.substring(0, 30) });
             } else {
                 // 🚨 FIX: 매핑 없는 캐릭터 → 전역 baseline으로 복원 (하드코딩 기본값 X)
                 settings.userPrompt = _globalBaseline.userPrompt;
                 settings.temperature = _globalBaseline.temperature;
                 settings.style = _globalBaseline.style;
-                settings.narrationRegister = _globalBaseline.narrationRegister;
-                settings.dialogueRegister = _globalBaseline.dialogueRegister;
                 $('#ct-user-prompt').val(settings.userPrompt);
                 $('#ct-style').val(settings.style);
-                $('#ct-narration-register').val(settings.narrationRegister);
-                $('#ct-dialogue-register').val(settings.dialogueRegister);
                 $('#ct-temperature').val(settings.temperature);
                 $('#ct-prompt-preset').val('');
                 // 🚨 직접 저장 + baseline 영구 보존
                 extension_settings[EXT_NAME] = { ...settings, _baseline: { ..._globalBaseline } };
                 stContext.saveSettingsDebounced();
-                console.log(`[CAT] 🏠 baseline 복원 (프리셋 없음):`, { style: _globalBaseline.style, narration: _globalBaseline.narrationRegister, dialogue: _globalBaseline.dialogueRegister, temp: _globalBaseline.temperature, prompt: _globalBaseline.userPrompt.substring(0, 30) || '(없음)' });
+                console.log(`[CAT] 🏠 baseline 복원 (프리셋 없음):`, { style: _globalBaseline.style, temp: _globalBaseline.temperature, prompt: _globalBaseline.userPrompt.substring(0, 30) || '(없음)' });
             }
             
             // 🚨 프리셋 로드 완료: 억제 OFF
@@ -1470,7 +1165,7 @@ jQuery(async () => {
             setSuppressAutoSave(false);
         }, 500);
     });
-    console.log('[CAT] 🐱 Translator v1.2.12 로드 완료!');
+    console.log('[CAT] 🐱 Translator v1.1.0 로드 완료!');
     
     // 🚨 페이지 가시성 변경 시 60초 이상 stuck 글로우 정리 (모바일 백그라운드 복귀 대응)
     document.addEventListener('visibilitychange', () => {
@@ -1507,6 +1202,7 @@ jQuery(async () => {
         const ctx = SillyTavern?.getContext?.();
         if (!ctx?.chat) return;
         let restored = 0;
+        let discarded = 0;
         ctx.chat.forEach((msg, i) => {
             if (msg.is_user) return;
             if (!msg.extra?.swipe_translations) return;
@@ -1520,7 +1216,9 @@ jQuery(async () => {
                     currentSwipeText === currentSwipeData.original_mes ||
                     msg.mes === currentSwipeData.original_mes);
             if (!sourceMatches) {
-                console.warn(`[CAT] ⚠️ swipe 원문 불일치 번역 보존 후 무시 #${i}/swipe ${msg.swipe_id}`);
+                console.warn(`[CAT] 🧹 swipe 원문 불일치 번역 폐기 #${i}/swipe ${msg.swipe_id}`);
+                delete msg.extra.swipe_translations[msg.swipe_id];
+                discarded++;
                 return;
             }
             
@@ -1529,25 +1227,18 @@ jQuery(async () => {
                 msg.extra.original_mes = currentSwipeData.original_mes;
                 msg.extra.display_text = currentSwipeData.display_text;
                 msg.extra.cat_swipe_id = msg.swipe_id;
-                rememberTranslationBackup(msg, currentSwipeData.original_mes, currentSwipeData.display_text);
-                $(`.mes[mesid="${i}"]`).attr('data-cat-translated', 'true');
-                ctx.updateMessageBlock(i, msg);
                 restored++;
             }
         });
-        if (restored > 0) {
-            console.log(`[CAT] 🔄 swipe 번역 복원 ${restored}개 (${source})`);
+        if (restored > 0 || discarded > 0) {
+            console.log(`[CAT] 🔄 swipe 번역 복원 ${restored}개 / 폐기 ${discarded}개 (${source})`);
             scheduleChatSave(`swipe restore ${source}`);
         }
     }
     
     // 채팅 진입 시 즉시 복구
     stContext.eventSource.on(stContext.event_types.CHAT_CHANGED, () => {
-        setTimeout(async () => {
-            repairContamination('CHAT_CHANGED');
-            restoreSwipeTranslations('CHAT_CHANGED');
-            await restoreMissingTranslations('CHAT_CHANGED');
-        }, 300);
+        setTimeout(() => { repairContamination('CHAT_CHANGED'); restoreSwipeTranslations('CHAT_CHANGED'); }, 300);
     });
     
     // 메시지 렌더 시 복구 (AI 응답 생성 전에 오염 제거)
@@ -1607,12 +1298,24 @@ jQuery(async () => {
             msg.extra.original_mes = msg.mes;
             
             if (mode === 'auto') {
-                // 실패 시 복구할 수 있게 기존 번역문은 성공 전까지 유지한다.
+                delete msg.extra.display_text;
+                delete msg.extra.cat_literal;
+            delete msg.extra.cat_prev_display;
+                // 🚨 swipe_translations에서도 현재 swipe 삭제 (restoreSwipeTranslations 차단)
+                if (msg.extra.swipe_translations && msg.swipe_id !== undefined) {
+                    delete msg.extra.swipe_translations[msg.swipe_id];
+                }
+                delete msg.extra.cat_swipe_id;
+                $(`.mes[mesid="${idx}"]`).removeAttr('data-cat-translated');
                 stContext.updateMessageBlock(idx, msg);
-                scheduleChatSave(`edit poll source ${idx}`);
+                catNotify(`${getThemeEmoji()} 원문 수정 감지 → 자동 재번역 중...`, "info");
+                // 🚨 캐시 우회: 새 원문에 대한 캐시 삭제 (이전 번역 재사용 방지)
+                const modelKey = getCacheModelKey(settings);
+                const targetLang = detectLanguageDirection(msg.mes, settings).targetLang;
+                deleteCached(msg.mes, targetLang, modelKey);
                 setTimeout(() => {
                     if (getLiveChat() !== pollChatRef) return;
-                    retranslateEditedMessage(idx, msg.extra.original_mes, pollChatRef);
+                    processMessage(idx, false, null, false, false);
                 }, 300);
             } else if (mode === 'notify') {
                 stContext.updateMessageBlock(idx, msg);
@@ -1622,11 +1325,7 @@ jQuery(async () => {
     }, 3000);
     
     // 최초 로드 시 복구
-    setTimeout(async () => {
-        repairContamination('init');
-        restoreSwipeTranslations('init');
-        await restoreMissingTranslations('init');
-    }, 1500);
+    setTimeout(() => { repairContamination('init'); restoreSwipeTranslations('init'); }, 1500);
     
     // 🚨 채팅 파일 관리 미리보기 번역
     setupChatPreviewTranslation();

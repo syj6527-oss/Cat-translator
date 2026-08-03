@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Translator v1.2.12 - cache.js
+// 🐱 Translator v1.1.0 - cache.js
 // IndexedDB 영구 캐시: 유사 문장 매칭, Thought 캐싱, 통계
 // ============================================================
 
@@ -90,81 +90,17 @@ export async function getCached(originalText, targetLang, modelKey = 'default', 
         const store = tx.objectStore(STORE_TRANSLATIONS);
         const result = await promisifyRequest(store.get(key));
 
-        let matched = null;
         if (result && !isExpired(result.timestamp) && (result.scopeKey || '') === scopeKey) {
-            matched = result;
-        } else if (result?.variants?.[scopeKey] && !isExpired(result.variants[scopeKey].timestamp)) {
-            matched = { ...result, ...result.variants[scopeKey], scopeKey };
-        }
-
-        if (matched) {
             stats.hits++;
             stats.tokensSaved += estimateTokens(originalText);
             saveStats();
-            return matched;
+            return result;
         }
     } catch (e) { /* miss */ }
 
     stats.misses++;
     saveStats();
     return null;
-}
-
-// ─── 복구용 최신 캐시 조회 (문맥 scope가 바뀌어도 저장된 번역은 보존) ─────────────
-function pickLatestCacheCandidate(result) {
-    if (!result) return null;
-    const candidates = [];
-    if (!isExpired(result.timestamp)) candidates.push(result);
-    for (const [variantScope, variant] of Object.entries(result.variants || {})) {
-        if (variant && !isExpired(variant.timestamp)) {
-            candidates.push({ ...result, ...variant, scopeKey: variantScope });
-        }
-    }
-    candidates.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-    return candidates[0] || null;
-}
-
-export async function getCachedLatest(originalText, targetLang, modelKey = 'default', allowAnyModel = false) {
-    if (!db) return null;
-    const key = buildCacheKey(originalText, targetLang, modelKey);
-
-    try {
-        const tx = db.transaction(STORE_TRANSLATIONS, 'readonly');
-        const store = tx.objectStore(STORE_TRANSLATIONS);
-        const result = await promisifyRequest(store.get(key));
-        const exact = pickLatestCacheCandidate(result);
-        if (exact || !allowAnyModel) return exact;
-    } catch (e) {
-        if (!allowAnyModel) return null;
-    }
-
-    // 설정/프롬프트 변경으로 modelKey가 달라진 후에도 유실된 번역문은 복구할 수 있게
-    // 같은 원문+목표언어의 구버전 키 중 가장 최근 번역을 찾는다.
-    try {
-        const prefix = `${CACHE_KEY_VERSION}:${normalizeSourceForKey(originalText)}::${targetLang}::`;
-        const tx = db.transaction(STORE_TRANSLATIONS, 'readonly');
-        const store = tx.objectStore(STORE_TRANSLATIONS);
-        const range = IDBKeyRange.bound(prefix, `${prefix}\uffff`);
-        const request = store.openCursor(range);
-        const matches = [];
-        await new Promise((resolve, reject) => {
-            request.onsuccess = event => {
-                const cursor = event.target.result;
-                if (!cursor) {
-                    resolve();
-                    return;
-                }
-                const candidate = pickLatestCacheCandidate(cursor.value);
-                if (candidate) matches.push(candidate);
-                cursor.continue();
-            };
-            request.onerror = () => reject(request.error);
-        });
-        matches.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-        return matches[0] || null;
-    } catch (e) {
-        return null;
-    }
 }
 
 // ─── 캐시 삭제 (특정 항목) ──────────────────────────────────────
@@ -209,27 +145,6 @@ export async function setCached(originalText, targetLang, translated, thought = 
             }
         }
 
-        // 같은 원문이 다른 채팅/문맥에서 번역되어도 이전 scope를 덮어쓰지 않는다.
-        // 기존 키는 유지해 구버전 IndexedDB 데이터와 호환한다.
-        const variants = { ...(existing?.variants || {}) };
-        if (existing?.translated) {
-            variants[existing.scopeKey || ''] = {
-                translated: existing.translated,
-                literal: existing.literal || null,
-                thought: existing.thought || null,
-                timestamp: existing.timestamp || Date.now()
-            };
-        }
-        variants[scopeKey] = {
-            translated,
-            literal,
-            thought,
-            timestamp: Date.now()
-        };
-        const variantEntries = Object.entries(variants)
-            .sort(([, a], [, b]) => (b.timestamp || 0) - (a.timestamp || 0))
-            .slice(0, 20);
-
         const entry = {
             key,
             original: originalText,
@@ -239,7 +154,6 @@ export async function setCached(originalText, targetLang, translated, thought = 
             lang: targetLang,
             thought,
             scopeKey,
-            variants: Object.fromEntries(variantEntries),
             history,
             timestamp: Date.now()
         };

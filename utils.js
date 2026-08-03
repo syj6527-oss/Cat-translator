@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Translator v1.2.12 - utils.js
+// 🐱 Translator v1.1.0 - utils.js
 // 유틸리티: 알림, 정규식 세탁기, HTML/CSS 방어, 언어 감지
 // ============================================================
 
@@ -831,143 +831,15 @@ export function getCacheModelKey(settings) {
     
     const dialogueMode = settings.dialogueBilingual || 'off';
     const literalMode = settings.literalBilingual === 'on' ? 'on' : 'off';
-    const registerSettings = resolveRegisterSettings(settings);
-    const style = registerSettings.style;
+    const style = settings.style || 'normal';
     const temperature = Number.isFinite(Number(settings.temperature)) ? Number(settings.temperature) : 0.3;
     const promptHash = hashCacheSetting(settings.userPrompt || '');
     const dictionaryHash = hashCacheSetting(settings.dictionary || '');
     const contextRange = Number.isFinite(Number(settings.contextRange)) ? Number(settings.contextRange) : 1;
     
-    return `${key}::cache-v6::dialogue:${dialogueMode}::literal:${literalMode}` +
-        `::style:${style}::narration:${registerSettings.narrationRegister}` +
-        `::dialogue-register:${registerSettings.dialogueRegister}` +
-        `::temp:${temperature}::context:${contextRange}` +
+    return `${key}::cache-v3::dialogue:${dialogueMode}::literal:${literalMode}` +
+        `::style:${style}::temp:${temperature}::context:${contextRange}` +
         `::prompt:${promptHash}::dict:${dictionaryHash}`;
-}
-
-const TRANSLATION_STYLE_ALIASES = {
-    formal: 'formal_all',
-    informal: 'informal_all'
-};
-
-const TRANSLATION_STYLE_KEYS = new Set(['normal', 'novel', 'casual', 'natural', 'literary']);
-
-const STYLE_REGISTER_POLICIES = {
-    formal_narration: { narration: 'polite', dialogue: 'context' },
-    formal_all: { narration: 'polite', dialogue: 'polite' },
-    informal_narration: { narration: 'declarative', dialogue: 'context' },
-    informal_all: { narration: 'declarative', dialogue: 'informal' }
-};
-
-export function normalizeStyleKey(style = 'normal') {
-    return resolveRegisterSettings({ style }).style;
-}
-
-export function normalizeNarrationRegister(value = 'declarative') {
-    return value === 'polite' ? 'polite' : 'declarative';
-}
-
-export function normalizeDialogueRegister(value = 'context') {
-    return value === 'polite' || value === 'informal' ? value : 'context';
-}
-
-/**
- * v1.2.5 이하의 결합형 style 값을 일반 스타일 + 독립 존비어 설정으로 이관한다.
- * 명시적인 새 설정이 있으면 구버전 style보다 우선한다.
- */
-export function resolveRegisterSettings(settingsOrStyle = {}) {
-    const source = typeof settingsOrStyle === 'object' && settingsOrStyle !== null
-        ? settingsOrStyle
-        : { style: settingsOrStyle };
-    const rawStyle = TRANSLATION_STYLE_ALIASES[String(source.style || 'normal')] || String(source.style || 'normal');
-    const legacyPolicy = STYLE_REGISTER_POLICIES[rawStyle] || {};
-    return {
-        style: TRANSLATION_STYLE_KEYS.has(rawStyle) ? rawStyle : 'normal',
-        narrationRegister: normalizeNarrationRegister(
-            source.narrationRegister ?? legacyPolicy.narration ?? 'declarative'
-        ),
-        dialogueRegister: normalizeDialogueRegister(
-            source.dialogueRegister ?? legacyPolicy.dialogue ?? 'context'
-        )
-    };
-}
-
-export function getStyleRegisterPolicy(settingsOrStyle = {}) {
-    const resolved = resolveRegisterSettings(settingsOrStyle);
-    return {
-        key: resolved.style,
-        narration: resolved.narrationRegister,
-        dialogue: resolved.dialogueRegister
-    };
-}
-
-export function shouldUpdateGlobalBaseline({
-    hasCharPreset = false,
-    hasSelectedPreset = false,
-    isPresetLoading = false
-} = {}) {
-    return !hasCharPreset && !hasSelectedPreset && !isPresetLoading;
-}
-
-function countKoreanRegisterEndings(text) {
-    const value = String(text || '');
-    const boundary = `(?=[.!?…\\s"'”’)」』]|$)`;
-    // '합니다/갑니다/봅니다' 등을 포괄하되 평서형 '아니다'는 제외한다.
-    const formalDa = (value.match(new RegExp(`(?<!아)니다${boundary}`, 'g')) || []).length;
-    const polite = (value.match(new RegExp(`(?:요|(?<!아)니다|(?<!아)니까|십시오)${boundary}`, 'g')) || []).length;
-    const allDa = (value.match(new RegExp(`다${boundary}`, 'g')) || []).length;
-    const declarative = Math.max(0, allDa - formalDa);
-    const conversational = (value.match(new RegExp(`(?:야|어|아|지|네|군|냐|니|자|라|가|와|줘|봐|돼|해|해라|했어|거야|거지|잖아|거든|겠어|마)${boundary}`, 'g')) || []).length;
-    return {
-        polite,
-        formalPolite: formalDa,
-        haeyo: Math.max(0, polite - formalDa),
-        declarative,
-        informal: declarative + conversational
-    };
-}
-
-export function analyzeKoreanRegisterConsistency(text, settingsOrStyle = {}) {
-    const policy = getStyleRegisterPolicy(settingsOrStyle);
-    const prose = String(text || '')
-        .replace(/```[\s\S]*?```/g, ' ')
-        .replace(/<!--[\s\S]*?-->/g, ' ')
-        .replace(/\{\{[\s\S]*?\}\}/g, ' ')
-        .replace(/<[^>]+>/g, ' ');
-    const dialoguePattern = /"(?:\\.|[^"\\])*"|“[^”]*”|「[^」]*」|『[^』]*』/g;
-    const dialogues = [...prose.matchAll(dialoguePattern)].map(match => match[0].slice(1, -1));
-    const narration = prose.replace(dialoguePattern, ' ');
-    const narrationCounts = countKoreanRegisterEndings(narration);
-    const dialogueCounts = countKoreanRegisterEndings(dialogues.join('\n'));
-    const issues = [];
-
-    if (policy.narration === 'polite') {
-        if (narrationCounts.declarative >= 2 && narrationCounts.declarative >= narrationCounts.polite) {
-            issues.push(`서술 존댓말 이탈 (-다 ${narrationCounts.declarative}/존대 ${narrationCounts.polite})`);
-        } else if (narrationCounts.haeyo >= 2 && narrationCounts.haeyo >= narrationCounts.formalPolite) {
-            issues.push(`서술 -습니다체 이탈 (-요 ${narrationCounts.haeyo}/-습니다 ${narrationCounts.formalPolite})`);
-        }
-    } else if (narrationCounts.polite >= 2 && narrationCounts.polite >= narrationCounts.declarative) {
-        issues.push(`서술 반말·-다체 이탈 (존대 ${narrationCounts.polite}/-다 ${narrationCounts.declarative})`);
-    } else if (narrationCounts.declarative >= 2 && narrationCounts.polite >= 2) {
-        issues.push(`서술 말투 혼용 (-다 ${narrationCounts.declarative}/존대 ${narrationCounts.polite})`);
-    }
-
-    if (policy.dialogue === 'polite') {
-        if (dialogueCounts.informal >= 2 && dialogueCounts.informal > dialogueCounts.polite) {
-            issues.push(`대사 존댓말 이탈 (반말 ${dialogueCounts.informal}/존대 ${dialogueCounts.polite})`);
-        }
-    } else if (policy.dialogue === 'informal' && dialogueCounts.polite >= 2) {
-        issues.push(`대사 반말 이탈 (존대 ${dialogueCounts.polite}/반말 ${dialogueCounts.informal})`);
-    }
-
-    const mixedDialogue = dialogues.some(dialogue => {
-        const counts = countKoreanRegisterEndings(dialogue);
-        return counts.polite > 0 && counts.informal > 0;
-    });
-    if (mixedDialogue) issues.push('한 대사 안에서 존댓말·반말 혼용');
-
-    return { policy, narration: narrationCounts, dialogue: dialogueCounts, issues };
 }
 
 function hashCacheSetting(value) {
@@ -1326,51 +1198,4 @@ export function buildLiteralDetailsHtml(literalText, originalText = null) {
 export function stripLiteralDetails(text) {
     if (!text) return text;
     return text.replace(/\s*<details class="cat-literal">[\s\S]*?<\/details>\s*/g, '').trim();
-}
-
-// ============================================================
-// 🚨 v1.2.0: 한영 병기 코드 조립 (Dialogue Bilingual Assembly)
-// 모델에겐 순수 한국어 번역만 요구하고, "영어 [한국어]" 형식은 코드가 기계 조립
-// → 괄호 위치 이탈·서술 이중 출력·서술 미번역이 구조적으로 불가능해짐
-// ============================================================
-export function assembleDialogueBilingual(sourceText, koreanText) {
-    const quoteRe = /"([^"\n]+)"|“([^”\n]+)”/g;
-    const srcQuotes = [];
-    let m;
-    while ((m = quoteRe.exec(String(sourceText || ''))) !== null) {
-        srcQuotes.push(m[1] ?? m[2]);
-    }
-    if (srcQuotes.length === 0) return { ok: false, reason: '원문 대사 없음', text: koreanText };
-
-    const korQuotes = [];
-    quoteRe.lastIndex = 0;
-    while ((m = quoteRe.exec(String(koreanText || ''))) !== null) {
-        korQuotes.push(m[1] ?? m[2]);
-    }
-    if (korQuotes.length !== srcQuotes.length) {
-        return { ok: false, reason: `대사 수 불일치 (원문 ${srcQuotes.length} vs 번역 ${korQuotes.length})`, text: koreanText };
-    }
-    // 🚨 v1.2.2 방어: 모델이 지시를 어기고 구식 병기([괄호])나 영어를 남긴 출력이면
-    // 조립 시 중첩 괴물("영어 [영어 [한국어]]")이 되므로 조립하지 않고 그대로 폴백
-    if (korQuotes.some(q => q.includes('[') || q.includes(']'))) {
-        return { ok: false, reason: '번역 출력에 병기 괄호 잔존 (모델이 구식 형식으로 출력)', text: koreanText };
-    }
-    const korAll = korQuotes.join(' ');
-    const hangul = (korAll.match(/[가-힣]/g) || []).length;
-    const latin = (korAll.match(/[A-Za-z]/g) || []).length;
-    if (latin > hangul) {
-        return { ok: false, reason: '번역 대사가 순수 한국어가 아님 (영문 우세)', text: koreanText };
-    }
-
-    // 순서대로 짝지어 번역문의 대사를 "원문대사 [한국어대사]"로 치환
-    let idx = 0;
-    quoteRe.lastIndex = 0;
-    const assembled = String(koreanText).replace(quoteRe, (full, g1, g2) => {
-        const kor = (g1 ?? g2 ?? '').trim();
-        const src = String(srcQuotes[idx++]).trim();
-        // 이미 같은 내용이거나 원문 대사에 실질 문자가 없으면 그대로
-        if (!/[A-Za-z\u3040-\u30ff\u4e00-\u9fff]/.test(src)) return full;
-        return `"${src} [${kor}]"`;
-    });
-    return { ok: true, reason: null, text: assembled };
 }
