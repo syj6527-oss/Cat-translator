@@ -831,15 +831,99 @@ export function getCacheModelKey(settings) {
     
     const dialogueMode = settings.dialogueBilingual || 'off';
     const literalMode = settings.literalBilingual === 'on' ? 'on' : 'off';
-    const style = settings.style || 'normal';
+    const style = normalizeStyleKey(settings.style);
     const temperature = Number.isFinite(Number(settings.temperature)) ? Number(settings.temperature) : 0.3;
     const promptHash = hashCacheSetting(settings.userPrompt || '');
     const dictionaryHash = hashCacheSetting(settings.dictionary || '');
     const contextRange = Number.isFinite(Number(settings.contextRange)) ? Number(settings.contextRange) : 1;
     
-    return `${key}::cache-v3::dialogue:${dialogueMode}::literal:${literalMode}` +
+    return `${key}::cache-v4::dialogue:${dialogueMode}::literal:${literalMode}` +
         `::style:${style}::temp:${temperature}::context:${contextRange}` +
         `::prompt:${promptHash}::dict:${dictionaryHash}`;
+}
+
+const TRANSLATION_STYLE_ALIASES = {
+    formal: 'formal_all',
+    informal: 'informal_all'
+};
+
+const TRANSLATION_STYLE_KEYS = new Set([
+    'normal', 'novel', 'casual', 'natural', 'literary',
+    'formal_narration', 'formal_all',
+    'informal_narration', 'informal_all'
+]);
+
+const STYLE_REGISTER_POLICIES = {
+    formal_narration: { narration: 'polite', dialogue: 'context' },
+    formal_all: { narration: 'polite', dialogue: 'polite' },
+    informal_narration: { narration: 'declarative', dialogue: 'context' },
+    informal_all: { narration: 'declarative', dialogue: 'informal' }
+};
+
+export function normalizeStyleKey(style = 'normal') {
+    const normalized = TRANSLATION_STYLE_ALIASES[String(style || 'normal')] || String(style || 'normal');
+    return TRANSLATION_STYLE_KEYS.has(normalized) ? normalized : 'normal';
+}
+
+export function getStyleRegisterPolicy(style = 'normal') {
+    const key = normalizeStyleKey(style);
+    return {
+        key,
+        ...(STYLE_REGISTER_POLICIES[key] || { narration: 'declarative', dialogue: 'context' })
+    };
+}
+
+function countKoreanRegisterEndings(text) {
+    const value = String(text || '');
+    const boundary = `(?=[.!?…\\s"'”’)」』]|$)`;
+    // '합니다/갑니다/봅니다' 등을 포괄하되 평서형 '아니다'는 제외한다.
+    const formalDa = (value.match(new RegExp(`(?<!아)니다${boundary}`, 'g')) || []).length;
+    const polite = (value.match(new RegExp(`(?:요|(?<!아)니다|(?<!아)니까|십시오)${boundary}`, 'g')) || []).length;
+    const allDa = (value.match(new RegExp(`다${boundary}`, 'g')) || []).length;
+    const declarative = Math.max(0, allDa - formalDa);
+    const conversational = (value.match(new RegExp(`(?:야|어|아|지|네|군|냐|니|자|라|가|와|줘|봐|돼|해|해라|했어|거야|거지|잖아|거든|겠어|마)${boundary}`, 'g')) || []).length;
+    return { polite, declarative, informal: declarative + conversational };
+}
+
+export function analyzeKoreanRegisterConsistency(text, style = 'normal') {
+    const policy = getStyleRegisterPolicy(style);
+    const prose = String(text || '')
+        .replace(/```[\s\S]*?```/g, ' ')
+        .replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/\{\{[\s\S]*?\}\}/g, ' ')
+        .replace(/<[^>]+>/g, ' ');
+    const dialoguePattern = /"(?:\\.|[^"\\])*"|“[^”]*”|「[^」]*」|『[^』]*』/g;
+    const dialogues = [...prose.matchAll(dialoguePattern)].map(match => match[0].slice(1, -1));
+    const narration = prose.replace(dialoguePattern, ' ');
+    const narrationCounts = countKoreanRegisterEndings(narration);
+    const dialogueCounts = countKoreanRegisterEndings(dialogues.join('\n'));
+    const issues = [];
+
+    if (policy.narration === 'polite') {
+        if (narrationCounts.declarative >= 2 && narrationCounts.declarative >= narrationCounts.polite) {
+            issues.push(`서술 존댓말 이탈 (-다 ${narrationCounts.declarative}/존대 ${narrationCounts.polite})`);
+        }
+    } else if (narrationCounts.polite >= 2 && narrationCounts.polite >= narrationCounts.declarative) {
+        issues.push(`서술 반말·-다체 이탈 (존대 ${narrationCounts.polite}/-다 ${narrationCounts.declarative})`);
+    } else if (narrationCounts.declarative >= 2 && narrationCounts.polite >= 2) {
+        issues.push(`서술 말투 혼용 (-다 ${narrationCounts.declarative}/존대 ${narrationCounts.polite})`);
+    }
+
+    if (policy.dialogue === 'polite') {
+        if (dialogueCounts.informal >= 2 && dialogueCounts.informal > dialogueCounts.polite) {
+            issues.push(`대사 존댓말 이탈 (반말 ${dialogueCounts.informal}/존대 ${dialogueCounts.polite})`);
+        }
+    } else if (policy.dialogue === 'informal' && dialogueCounts.polite >= 2) {
+        issues.push(`대사 반말 이탈 (존대 ${dialogueCounts.polite}/반말 ${dialogueCounts.informal})`);
+    }
+
+    const mixedDialogue = dialogues.some(dialogue => {
+        const counts = countKoreanRegisterEndings(dialogue);
+        return counts.polite > 0 && counts.informal > 0;
+    });
+    if (mixedDialogue) issues.push('한 대사 안에서 존댓말·반말 혼용');
+
+    return { policy, narration: narrationCounts, dialogue: dialogueCounts, issues };
 }
 
 function hashCacheSetting(value) {

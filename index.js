@@ -1,8 +1,8 @@
 // ============================================================
-// 🐱 Translator v1.1.0
+// 🐱 Translator v1.2.4
 // ============================================================
 import { extension_settings, getContext } from '../../../../scripts/extensions.js';
-import { catNotify, getThemeEmoji, getCompletionEmoji, setTextareaValue, getModelTheme, detectLanguageDirection, getCacheModelKey, buildLiteralDetailsHtml, stripLiteralDetails, analyzeLanguage, isClearlyLanguage, resolveInputTranslationDirection } from './utils.js';
+import { catNotify, getThemeEmoji, getCompletionEmoji, setTextareaValue, getModelTheme, detectLanguageDirection, getCacheModelKey, buildLiteralDetailsHtml, stripLiteralDetails, analyzeLanguage, isClearlyLanguage, resolveInputTranslationDirection, normalizeStyleKey } from './utils.js';
 import { initCache, deleteCached } from './cache.js';
 import { fetchTranslation, gatherContextMessages } from './translator.js';
 import { setupSettingsPanel, collectSettings, updateCacheStats, injectMessageButtons, injectInputButtons, setupDragDictionary, setupMutationObserver, showHistoryPopup, applyTheme, setSuppressAutoSave, clearPendingAutoSave, abortBulkTranslation, isTranslatedEditActive, markTranslatedEditSave, clearTranslatedEditSessions } from './ui.js';
@@ -16,6 +16,11 @@ if (!extension_settings[EXT_NAME] && extension_settings["cat-translator"]) {
     extension_settings[EXT_NAME] = JSON.parse(JSON.stringify(extension_settings["cat-translator"]));
 }
 let settings = Object.assign({}, defaultSettings, extension_settings[EXT_NAME]);
+settings.style = normalizeStyleKey(settings.style);
+if (settings._baseline) settings._baseline.style = normalizeStyleKey(settings._baseline.style);
+Object.values(settings.promptPresets || {}).forEach(preset => {
+    if (preset) preset.style = normalizeStyleKey(preset.style);
+});
 
 let _chatSaveTimer = null;
 const _translationApplyTokens = new Map();
@@ -536,7 +541,7 @@ async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTran
     const requestToken = `request:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
     _translationApplyTokens.set(msgId, requestToken);
 
-    const result = await fetchTranslation(textToTranslate, translationSettings, stContext, {
+    let result = await fetchTranslation(textToTranslate, translationSettings, stContext, {
         forceLang,
         prevTranslation: isInput ? (requestMsg.extra?.original_mes ? requestMsg.mes : null) : prevTranslation,
         contextMessages: contextMsgs,
@@ -544,6 +549,32 @@ async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTran
         silent,
         forceFresh
     });
+
+    const previousInputTranslation = isInput && prevTranslation
+        ? stripLiteralDetails(prevTranslation).trim()
+        : '';
+    if (previousInputTranslation && result?.text?.trim() === previousInputTranslation) {
+        catNotify(`${getThemeEmoji()} 같은 번역이 나와 다른 표현으로 한 번 더 시도해요.`, "info");
+        const retrySettings = {
+            ...translationSettings,
+            retranslateStrength: 'strong',
+            temperature: Math.min((parseFloat(translationSettings.temperature) || 0.3) + 0.4, 1.0)
+        };
+        result = await fetchTranslation(textToTranslate, retrySettings, stContext, {
+            forceLang,
+            prevTranslation: previousInputTranslation,
+            contextMessages: contextMsgs,
+            abortSignal,
+            silent,
+            forceFresh: true
+        });
+    }
+
+    if (previousInputTranslation && result?.text?.trim() === previousInputTranslation) {
+        _translationApplyTokens.delete(msgId);
+        catNotify(`${getThemeEmoji()} 모델이 같은 번역을 반복해서 기존 번역을 유지했어요.`, "warning");
+        return;
+    }
 
     if (_translationApplyTokens.get(msgId) !== requestToken) {
         console.warn(`[CAT] ⏭️ 취소되거나 교체된 번역 결과 폐기 #${msgId}`);
@@ -771,12 +802,34 @@ async function handleEditAreaTranslation(editArea, msgId, abortSignal, isInput =
     };
     const editRequestToken = `edit:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
     _translationApplyTokens.set(msgId, editRequestToken);
-    const result = await fetchTranslation(sourceText, editSettings, stContext, {
+    let result = await fetchTranslation(sourceText, editSettings, stContext, {
         forceLang: direction.targetLang,
         prevTranslation: prevTrans,
         contextMessages: contextMsgs,
         abortSignal
     });
+
+    if (isInput && isReTranslation && result?.text?.trim() === currentText) {
+        catNotify(`${getThemeEmoji()} 같은 번역이 나와 다른 표현으로 한 번 더 시도해요.`, "info");
+        const retrySettings = {
+            ...editSettings,
+            retranslateStrength: 'strong',
+            temperature: Math.min((parseFloat(editSettings.temperature) || 0.3) + 0.4, 1.0)
+        };
+        result = await fetchTranslation(sourceText, retrySettings, stContext, {
+            forceLang: direction.targetLang,
+            prevTranslation: currentText,
+            contextMessages: contextMsgs,
+            abortSignal,
+            forceFresh: true
+        });
+    }
+
+    if (isInput && isReTranslation && result?.text?.trim() === currentText) {
+        _translationApplyTokens.delete(msgId);
+        catNotify(`${getThemeEmoji()} 모델이 같은 번역을 반복해서 기존 번역을 유지했어요.`, "warning");
+        return;
+    }
 
     if (_translationApplyTokens.get(msgId) !== editRequestToken) {
         console.warn(`[CAT] ⏭️ 취소되거나 교체된 편집 번역 결과 폐기 #${msgId}`);
@@ -959,25 +1012,91 @@ jQuery(async () => {
     });
     // 🚨 v1.2.0: 입력 자동번역 이중 구독 — ST 버전에 따라 USER_MESSAGE_RENDERED가
     // 없거나 발화하지 않는 환경 제보("둘 다 켜도 입력 자동 안 됨") 대응.
-    // MESSAGE_SENT(전송 시 확실히 발화하는 고전 이벤트)도 함께 걸고, 중복 발화는 1.5초 가드로 1회 처리
-    const _inputAutoDedup = { id: -1, ts: 0 };
+    // MESSAGE_SENT(전송 시 확실히 발화하는 고전 이벤트)도 함께 건다.
+    // 이벤트 수신 즉시 완료 처리하지 않고 실제 번역 성공 시에만 완료로 잠근다.
+    // 첫 이벤트의 예약 작업이 실패해도 USER_MESSAGE_RENDERED/DOM 폴백이 한 번 더 시도할 수 있다.
+    const _inputAutoJobs = new Map();
     // 🚨 v1.2.1: 입력자동 상태를 📋 디버그에서 볼 수 있게 기록 (모바일 진단용)
     window._catInputAutoStatus = window._catInputAutoStatus || { ev: '없음 (트리거 기록 없음)', id: -1, ts: 0 };
-    const handleInputAutoCore = (msgId, evName) => {
+    const handleInputAutoCore = (msgId, evName, delay = 500) => {
         if (settings.autoMode === 'none' || settings.autoMode === 'output') return;
         if (isNaN(msgId)) { console.warn(`[CAT] ⚠️ 입력 자동: ${evName} msgId 추출 실패`); return; }
+        const id = parseInt(msgId, 10);
         const now = Date.now();
-        if (_inputAutoDedup.id === msgId && now - _inputAutoDedup.ts < 1500) return;
-        _inputAutoDedup.id = msgId; _inputAutoDedup.ts = now;
-        window._catInputAutoStatus = { ev: evName, id: msgId, ts: now };
+        let job = _inputAutoJobs.get(id);
+        const liveChatRef = getLiveChat();
+        const liveMessageRef = liveChatRef?.[id] || null;
+        if (!job || job.chatRef !== liveChatRef ||
+            (liveMessageRef && job.messageRef && job.messageRef !== liveMessageRef)) {
+            job = {
+                chatRef: liveChatRef,
+                messageRef: liveMessageRef,
+                timers: new Set(),
+                inFlight: false,
+                retryRequested: false,
+                attempts: 0,
+                completed: false
+            };
+            _inputAutoJobs.set(id, job);
+        }
+        if (!job.messageRef && liveMessageRef) job.messageRef = liveMessageRef;
+        if (job.completed) return;
+        window._catInputAutoStatus = { ev: evName, id, ts: now };
         console.log(`[CAT] 🔔 입력 자동 트리거 (${evName}) #${msgId}`);
-        const renderedChatRef = getLiveChat();
-        setTimeout(() => {
-            if (getLiveChat() !== renderedChatRef) return;
-            const m = getLiveChat()?.[msgId];
-            if (!m || !m.is_user) return; // 유저 메시지만
-            processMessage(msgId, true, null, false, true);
-        }, 500);
+        const timer = setTimeout(async () => {
+            job.timers.delete(timer);
+            if (_inputAutoJobs.get(id) !== job || job.completed) return;
+            if (settings.autoMode === 'none' || settings.autoMode === 'output') {
+                _inputAutoJobs.delete(id);
+                return;
+            }
+            if (job.inFlight) {
+                job.retryRequested = true;
+                return;
+            }
+            if (getLiveChat() !== job.chatRef) {
+                _inputAutoJobs.delete(id);
+                return;
+            }
+            const message = job.chatRef?.[id];
+            if (!message || !message.is_user) {
+                if (job.attempts < 2) {
+                    job.attempts++;
+                    handleInputAutoCore(id, `retry:${evName}`, 200);
+                } else {
+                    _inputAutoJobs.delete(id);
+                }
+                return;
+            }
+
+            job.inFlight = true;
+            job.attempts++;
+            try {
+                await processMessage(id, true, null, false, true);
+            } catch (error) {
+                console.error(`[CAT] 입력 자동 처리 실패 #${id}:`, error);
+            } finally {
+                job.inFlight = false;
+                const current = getLiveChat() === job.chatRef ? job.chatRef?.[id] : null;
+                const hasTranslation = !!(current?.extra?.original_mes && current?.extra?.display_text);
+                const direction = current ? resolveInputTranslationDirection(current.mes || '', settings) : null;
+                const completed = hasTranslation || (direction && !direction.shouldTranslate);
+
+                if (completed) {
+                    job.completed = true;
+                    job.retryRequested = false;
+                    setTimeout(() => {
+                        if (_inputAutoJobs.get(id) === job) _inputAutoJobs.delete(id);
+                    }, 5000);
+                } else if (job.retryRequested && job.attempts < 2) {
+                    job.retryRequested = false;
+                    handleInputAutoCore(id, `retry:${evName}`, 250);
+                } else if (job.timers.size === 0) {
+                    _inputAutoJobs.delete(id);
+                }
+            }
+        }, delay);
+        job.timers.add(timer);
     };
     const handleInputAuto = (d, evName) => {
         const msgId = parseInt(typeof d === 'object' ? (d.messageId ?? d.id ?? d.index) : d, 10);
@@ -1178,7 +1297,7 @@ jQuery(async () => {
                 const preset = settings.promptPresets[presetName];
                 settings.userPrompt = preset.prompt || '';
                 settings.temperature = preset.temperature ?? 0.3;
-                settings.style = preset.style || 'normal';
+                settings.style = normalizeStyleKey(preset.style);
                 $('#ct-user-prompt').val(settings.userPrompt);
                 $('#ct-style').val(settings.style);
                 $('#ct-temperature').val(settings.temperature);
@@ -1208,7 +1327,7 @@ jQuery(async () => {
             setSuppressAutoSave(false);
         }, 500);
     });
-    console.log('[CAT] 🐱 Translator v1.1.0 로드 완료!');
+    console.log('[CAT] 🐱 Translator v1.2.4 로드 완료!');
     
     // 🚨 페이지 가시성 변경 시 60초 이상 stuck 글로우 정리 (모바일 백그라운드 복귀 대응)
     document.addEventListener('visibilitychange', () => {

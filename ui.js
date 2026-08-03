@@ -1,7 +1,7 @@
 // ============================================================
-// 🐱 Translator v1.1.0 - ui.js
+// 🐱 Translator v1.2.4 - ui.js
 // ============================================================
-import { catNotify, catNotifyProgress, getThemeEmoji, getCompletionEmoji, getModelTheme, setTextareaValue, resolveInputTranslationDirection } from './utils.js';
+import { catNotify, catNotifyProgress, getThemeEmoji, getCompletionEmoji, getModelTheme, setTextareaValue, resolveInputTranslationDirection, normalizeStyleKey } from './utils.js';
 import { getStats, clearAllCache, exportSettings, importSettings, getHistory, togglePin, deleteHistoryItem } from './cache.js';
 import { fetchTranslation, gatherContextMessages, SYSTEM_SHIELD, STYLE_PRESETS, getLastDebugLog } from './translator.js';
 
@@ -12,6 +12,15 @@ let _settingsRef = null;  // 🚨 collectSettings에서 promptPresets/charPreset
 let _suppressAutoSave = false;  // 🚨 프리셋 로드 중 autoSave/스타일핸들러 차단
 let _autoSaveTimer = null;  // 🚨 모듈 스코프로 이동 (CHAT_CHANGED에서 접근 필요)
 const _translatedEditSessions = new Map();
+
+function isUserMessageElement(element, msgId, chatRef = null) {
+    const id = Number.parseInt(msgId, 10);
+    const message = Number.isInteger(id)
+        ? (chatRef || SillyTavern?.getContext?.()?.chat)?.[id]
+        : null;
+    if (message) return message.is_user === true;
+    return element?.attr?.('is_user') === 'true';
+}
 
 function getTranslatedEditKey(msgId) {
     const id = Number.parseInt(msgId, 10);
@@ -296,7 +305,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
             applyTheme('cat', true);
         }
     });
-    $('#ct-style').val(settings.style || 'normal').on('change', function () { if (_suppressAutoSave) return; const preset = STYLE_PRESETS[$(this).val()]; if (preset) $('#ct-temperature').val(preset.temperature); });
+    $('#ct-style').val(normalizeStyleKey(settings.style)).on('change', function () { if (_suppressAutoSave) return; const preset = STYLE_PRESETS[$(this).val()]; if (preset) $('#ct-temperature').val(preset.temperature); });
     $('#ct-auto-mode').val(settings.autoMode); $('#ct-bidirectional').val(settings.bidirectional || 'off'); $('#ct-dialogue-bilingual').val(settings.dialogueBilingual || 'off'); $('#ct-literal-bilingual').val(settings.literalBilingual || 'off'); $('#ct-lang').val(settings.targetLang); $('#ct-temperature').val(settings.temperature || 0.3);
     
     // 대사 병기 변경 시 알림
@@ -355,7 +364,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
             clearTimeout(_autoSaveTimer);
             settings.userPrompt = preset.prompt || '';
             settings.temperature = preset.temperature ?? 0.3;
-            settings.style = preset.style || 'normal';
+            settings.style = normalizeStyleKey(preset.style);
             $('#ct-user-prompt').val(settings.userPrompt);
             $('#ct-style').val(settings.style);
             $('#ct-temperature').val(settings.temperature);
@@ -537,7 +546,7 @@ export function collectSettings() {
         directModel: modelVal === 'custom' ? ($('#ct-model-custom').val() || _settingsRef?.directModel || 'gemini-2.5-flash') : (modelVal || _settingsRef?.directModel || 'gemini-2.5-flash'),
         customModelName: $('#ct-model-custom').val() || _settingsRef?.customModelName || '', autoMode: $('#ct-auto-mode').val() || _settingsRef?.autoMode || 'none',
         bidirectional: $('#ct-bidirectional').val() || _settingsRef?.bidirectional || 'off', dialogueBilingual: $('#ct-dialogue-bilingual').val() || _settingsRef?.dialogueBilingual || 'off', literalBilingual: $('#ct-literal-bilingual').val() || _settingsRef?.literalBilingual || 'off', iconVisibility: $('#ct-icon-visibility').val() || _settingsRef?.iconVisibility || 'all',
-        targetLang: $('#ct-lang').val() || _settingsRef?.targetLang || 'Korean', style: $('#ct-style').val() || _settingsRef?.style || 'normal',
+        targetLang: $('#ct-lang').val() || _settingsRef?.targetLang || 'Korean', style: normalizeStyleKey($('#ct-style').val() || _settingsRef?.style),
         temperature: parseFloat($('#ct-temperature').val()) || _settingsRef?.temperature || 0.3, maxTokens: parseInt($('#ct-max-tokens').val()) || _settingsRef?.maxTokens || 8192,
         contextRange: Math.min(6, Math.max(0, parseInt($('#ct-context-range').val()) || _settingsRef?.contextRange || 1)),
         userPrompt: safePromptValue, dictionary: safeDictValue,
@@ -633,11 +642,33 @@ export function injectInputButtons(settings, stContext, processMessageFn) {
             
             const inputSettings = { ...settings, dialogueBilingual: 'off', literalBilingual: 'off', targetLang: inputDirection.targetLang };
             const requestChatRef = SillyTavern?.getContext?.()?.chat || stContext.chat;
-            const result = await fetchTranslation(textToTranslate, inputSettings, stContext, {
+            let result = await fetchTranslation(textToTranslate, inputSettings, stContext, {
                 forceLang: inputDirection.targetLang,
                 prevTranslation: prevTrans,
                 contextMessages: contextMsgs
             });
+
+            // 재번역인데 모델이 직전 번역과 완전히 같은 문장을 돌려주면 강한 재번역으로 한 번만 재시도한다.
+            // 기존에는 동일 결과를 조용히 무시해 버튼이 고장 난 것처럼 보였다.
+            if (isRetry && result?.text?.trim() === currentText) {
+                catNotify(`${getThemeEmoji()} 같은 번역이 나와 다른 표현으로 한 번 더 시도해요.`, "info");
+                const retrySettings = {
+                    ...inputSettings,
+                    retranslateStrength: 'strong',
+                    temperature: Math.min((parseFloat(inputSettings.temperature) || 0.3) + 0.4, 1.0)
+                };
+                result = await fetchTranslation(textToTranslate, retrySettings, stContext, {
+                    forceLang: inputDirection.targetLang,
+                    prevTranslation: currentText,
+                    contextMessages: contextMsgs,
+                    forceFresh: true
+                });
+            }
+
+            if (isRetry && result?.text?.trim() === currentText) {
+                catNotify(`${getThemeEmoji()} 모델이 같은 번역을 반복해서 기존 번역을 유지했어요.`, "warning");
+                return;
+            }
             if (result && result.text && result.text !== currentText) {
                 const liveChat = SillyTavern?.getContext?.()?.chat || stContext.chat;
                 const latestInput = sendArea.val().trim();
@@ -678,7 +709,7 @@ export function injectInputButtons(settings, stContext, processMessageFn) {
         const sendArea = $('#send_textarea'); const originalText = sendArea.data('cat-original-text');
         if (originalText) {
             setTextareaValue(sendArea[0], originalText);
-            sendArea.removeData('cat-original-text').removeData('cat-last-translated');
+            sendArea.removeData('cat-original-text').removeData('cat-last-translated').removeData('cat-last-target-lang');
             catNotify(`${getThemeEmoji()} 원문 복구 완료!`, "success");
         } else if (_catInputHistory.length > 0) {
             // 🚨 원본 데이터 없으면 히스토리에서 복구 (인풋 유실 최후 방어선)
@@ -725,9 +756,10 @@ export function injectMessageButtons(processMessageFn, revertMessageFn) {
         window._catMesBtnDelegated = true;
         $(document).on('click', '.cat-mes-trans-btn', function (e) {
             e.stopPropagation();
-            const msgId = $(this).data('mesid') || $(this).closest('.mes').attr('mesid');
-            const isUser = $(this).closest('.mes').hasClass('mes_user');
+            const mesElement = $(this).closest('.mes');
+            const msgId = $(this).data('mesid') ?? mesElement.attr('mesid');
             if (msgId === undefined) return;
+            const isUser = isUserMessageElement(mesElement, msgId);
             // 🚨 beta.15: 팝업이 열려 있으면 재탭 = 팝업 닫기 (토글, 조용히) — 글로우 상태와 무관
             const openPopup = $('.cat-history-popup');
             if (openPopup.length) {
@@ -1059,7 +1091,7 @@ async function executeBulkTranslation(count, settings, stContext, processMessage
             const i = taskIdx++;
             if (i >= targets.length) return;
             const el = targets[i];
-            const msgId = el.attr('mesid'); const isUser = el.hasClass('mes_user');
+            const msgId = el.attr('mesid'); const isUser = isUserMessageElement(el, msgId, bulkChatRef);
             await processMessageFn(msgId, isUser, controller.signal, true);
             const currentChat = SillyTavern?.getContext?.()?.chat || stContext.chat;
             if (controller.signal.aborted || currentChat !== bulkChatRef) {
