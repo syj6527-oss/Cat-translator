@@ -1,5 +1,5 @@
 // ============================================================
-// 🐱 Translator v1.2.7
+// 🐱 Translator v1.2.8
 // ============================================================
 import { extension_settings, getContext } from '../../../../scripts/extensions.js';
 import { catNotify, getThemeEmoji, getCompletionEmoji, setTextareaValue, getModelTheme, detectLanguageDirection, getCacheModelKey, buildLiteralDetailsHtml, stripLiteralDetails, analyzeLanguage, isClearlyLanguage, resolveInputTranslationDirection, resolveRegisterSettings, shouldUpdateGlobalBaseline } from './utils.js';
@@ -197,6 +197,7 @@ function repairAssistantMessageState(msg, msgId, source = '') {
 // 프리셋이 적용된 상태에서 새로고침해도 baseline이 오염되지 않음
 const BASELINE_VERSION = 3;
 const _savedBaseline = extension_settings[EXT_NAME]?._baseline;
+const _baselineNeedsConfirmation = !_savedBaseline;
 const _initialChar = (globalThis.SillyTavern?.getContext?.()?.name2) || stContext.name2 || '';
 const _initialPresetActive = !!(_initialChar && settings.charPresetMap?.[_initialChar]);
 // v2는 자동 저장이 baseline을 갱신하지 않던 버그가 있었다. 미연결 채팅에서는
@@ -1009,8 +1010,8 @@ jQuery(async () => {
 
     try { await initCache(); console.log('[CAT] 🐱 IndexedDB 캐시 초기화 완료'); } catch (e) { console.warn('[CAT] IndexedDB 초기화 실패, 메모리 캐시로 대체:', e); }
     setupSettingsPanel(settings, stContext, saveSettings); setupDragDictionary(settings, saveSettings); setupMutationObserver(processMessage, revertMessage, settings, stContext);
-    // 🚨 첫 마이그레이션 / baseline 리셋 안내
-    if (!_baselineValid) {
+    // 🚨 최초 설치로 baseline이 아직 없을 때만 확인 안내
+    if (_baselineNeedsConfirmation) {
         setTimeout(() => catNotify(`${getThemeEmoji()} 기본 설정을 확인 후 "설정 저장 및 적용" 버튼을 눌러주세요!`, "warning"), 2000);
     }
     // 🚨 자동 번역: 이미지/시스템/숨김 메시지 스킵 (데이터 기반)
@@ -1356,7 +1357,7 @@ jQuery(async () => {
             setSuppressAutoSave(false);
         }, 500);
     });
-    console.log('[CAT] 🐱 Translator v1.2.7 로드 완료!');
+    console.log('[CAT] 🐱 Translator v1.2.8 로드 완료!');
     
     // 🚨 페이지 가시성 변경 시 60초 이상 stuck 글로우 정리 (모바일 백그라운드 복귀 대응)
     document.addEventListener('visibilitychange', () => {
