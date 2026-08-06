@@ -1220,9 +1220,12 @@ function postProcessBilingualText(text, bilingualMode) {
     return transformOutsideFencedBlocks(text, (segment) => {
         let processed = segment;
         if (bilingualMode !== 'off') {
+            // 🚨 beta.5 핫픽스: 모든 인용구 규칙에 개행 금지([^"\n]) 적용.
+            // 실제 병기 대사는 한 줄인데, 개행을 허용하면 닫는따옴표~다음 여는따옴표
+            // 사이의 여러 문단이 가짜 인용구로 매치되어 병합/교정 규칙이 문단을 삼킨다.
             const beforeMerge = processed;
-            processed = processed.replace(/"([^"]*?)"/g, (match, content) => {
-                const bracketRegex = /\s*\[([^\]]*[가-힣ぁ-んァ-ヶ一-龥][^\]]*)\]\s*/g;
+            processed = processed.replace(/"([^"\n]*?)"/g, (match, content) => {
+                const bracketRegex = /\s*\[([^\]\n]*[가-힣ぁ-んァ-ヶ一-龥][^\]\n]*)\]\s*/g;
                 const brackets = [...content.matchAll(bracketRegex)];
                 if (brackets.length < 2) return match;
                 
@@ -1232,7 +1235,7 @@ function postProcessBilingualText(text, bilingualMode) {
             });
             if (beforeMerge !== processed) console.log('[CAT] 🔗 끊긴 병기 자동 병합');
             
-            processed = processed.replace(/"([^"]*?[가-힣][^"]*?)\s*\[([^\]]*[a-zA-Z][^\]]*)\]([^"]*?)"/g, (match, kor, eng, rest) => {
+            processed = processed.replace(/"([^"\n]*?[가-힣][^"\n]*?)\s*\[([^\]\n]*[a-zA-Z][^\]\n]*)\]([^"\n]*?)"/g, (match, kor, eng, rest) => {
                 const korChars = (kor.match(/[가-힣]/g) || []).length;
                 const engChars = (eng.match(/[a-zA-Z]/g) || []).length;
                 if (korChars <= 3 || engChars <= 3) return match;
@@ -1243,10 +1246,10 @@ function postProcessBilingualText(text, bilingualMode) {
             // 요구해서 한국어 인용구("영어" 같은)를 거르지 못했고, 그 결과 다음 규칙이
             // 닫는따옴표+여는따옴표를 한 쌍으로 오인해 "…"  […]"" 꼴로 따옴표를
             // 꼬아놓았음(실측 재현). 내용 제한을 풀어 순서 하자를 제거한다.
-            processed = processed.replace(/"([^"]+)"\s*"\[([^\]]*[가-힣][^\]]*)\]"/g, '"$1 [$2]"');
+            processed = processed.replace(/"([^"\n]+)"\s*"\[([^\]\n]*[가-힣][^\]\n]*)\]"/g, '"$1 [$2]"');
             // 괄호가 따옴표 밖으로 밀린 케이스: 실제 내용이 있는 인용구 + 한국어 괄호만
             // 병합 (공백뿐인 가짜 인용구 오인 방지, [숫자] 각주류 오병합 방지)
-            processed = processed.replace(/"([^"]*[^\s"][^"]*)"\s*\[([^\]]*[가-힣][^\]]*)\]/g, '"$1 [$2]"');
+            processed = processed.replace(/"([^"\n]*[^\s"][^"\n]*)"\s*\[([^\]\n]*[가-힣][^\]\n]*)\]/g, '"$1 [$2]"');
             // 잔여 케이스(마침표 뒤 괄호): 한국어 괄호일 때만 — [숫자] 각주의 닫는따옴표를 먹지 않게
             processed = processed.replace(/\."\s*\[(?=[^\]]*[가-힣])/g, '. [');
             // 🚨 beta.5: "한국어 [한국어]" 중복 병기 접기 — 모델이 영어 원문 유지에
@@ -1256,7 +1259,7 @@ function postProcessBilingualText(text, bilingualMode) {
             const beforeKoDup = processed;
             const collapseKoDup = (open, close) => {
                 const pattern = new RegExp(
-                    `${open}([^${close}\\[\\]]*[가-힣][^${close}\\[\\]]*?)\\s*\\[([^\\]]*[가-힣][^\\]]*)\\]\\s*${close}`,
+                    `${open}([^${close}\\[\\]\\n]*[가-힣][^${close}\\[\\]\\n]*?)\\s*\\[([^\\]\\n]*[가-힣][^\\]\\n]*)\\]\\s*${close}`,
                     'g'
                 );
                 processed = processed.replace(pattern, (match, outer, inner) => {
@@ -1367,13 +1370,20 @@ function validateKoEnBilingualDialogue(original, output) {
 // 한 인용구에 괄호가 여러 개면(끊긴 병기) 한국어들을 이어붙인다.
 // 코드펜스 안은 건드리지 않는다.
 function degradeBilingualToKorean(text) {
+    // 🚨 beta.5 핫픽스: 따옴표 내부 개행을 금지한다. 이전 정규식은 개행을 허용해
+    // 한 대사의 닫는따옴표부터 다른 문단의 여는따옴표까지를 하나의 인용구로 오인,
+    // 그 사이의 DAY 헤더 메타 괄호([맑음, 72°F] 등)를 병기로 착각해 문단·구분선을
+    // 통째로 삼켰다 (실측: 매치 하나 212자에 구분선+헤더 포함). 실제 병기 대사는
+    // 한 줄이므로 \n 제외가 정확한 경계다.
+    // 또한 역전 병기("한국어 [English]")도 지원: 괄호가 영어면 바깥 한국어를 살린다.
     const stripPair = (open, close) => (segment) => segment.replace(
-        new RegExp(`${open}([^${close}]*\\[[^\\]]*[가-힣][^\\]]*\\][^${close}]*)${close}`, 'g'),
+        new RegExp(`${open}([^${close}\\n]*\\[[^\\]\\n]+\\][^${close}\\n]*)${close}`, 'g'),
         (match, inner) => {
             const koreanParts = [];
-            let leftover = inner.replace(/([^\[\]]*?)\s*\[([^\]]*[가-힣][^\]]*)\]/g, (mm, pre, ko) => {
-                koreanParts.push(ko.trim());
-                return '';
+            let leftover = inner.replace(/([^\[\]\n]*?)\s*\[([^\]\n]+)\]/g, (mm, pre, bracket) => {
+                if (/[가-힣]/.test(bracket)) { koreanParts.push(bracket.trim()); return ''; }
+                if (/[가-힣]/.test(pre)) { koreanParts.push(pre.trim()); return ''; }
+                return mm; // 한국어가 없는 괄호(메타데이터 등)는 병기가 아님 → 유지
             });
             leftover = leftover.replace(/\s+/g, ' ').trim();
             if (koreanParts.length === 0) return match;
