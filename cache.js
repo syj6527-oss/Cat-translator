@@ -5,7 +5,7 @@
 
 import { normalizeText } from './utils.js';
 
-const DB_NAME = 'CatTranslatorCache';
+const DB_NAME = 'CatTranslatorBetaCache';
 const DB_VERSION = 2;
 const STORE_TRANSLATIONS = 'translations';
 const STORE_STATS = 'stats';

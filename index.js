@@ -11,9 +11,12 @@ const EXT_NAME = "cat-translator";
 const stContext = getContext();
 
 const defaultSettings = { profile: '', customKey: '', vertexKey: '', vertexProject: '', vertexRegion: 'global', directModel: 'gemini-2.5-flash', customModelName: '', autoMode: 'none', bidirectional: 'off', dialogueBilingual: 'off', literalBilingual: 'off', iconVisibility: 'all', targetLang: 'Korean', style: 'normal', temperature: 0.3, maxTokens: 8192, contextRange: 1, userPrompt: '', dictionary: '', retranslateStrength: 'normal', afterEditMode: 'notify', previewTranslate: 'off', previewCleanup: 'off', promptPresets: {}, charPresetMap: {} };
-// 정식판 설정은 첫 베타 실행 때만 한 방향으로 복사한다. 이후 두 설정은 독립적이다.
-if (!extension_settings[EXT_NAME] && extension_settings["cat-translator"]) {
-    extension_settings[EXT_NAME] = JSON.parse(JSON.stringify(extension_settings["cat-translator"]));
+// 🚨 v1.1.2 정식 승격: 베타(cat-translator-beta) 설정을 최초 1회만 이관한다.
+// 이관 후에는 마커(_betaMigrated)로 재이관을 막아 두 설정이 독립적으로 유지된다.
+// 베타를 쓴 적 없는 사용자는 기존 정식 설정/기본값 그대로.
+if (extension_settings["cat-translator-beta"] && !extension_settings[EXT_NAME]?._betaMigrated) {
+    extension_settings[EXT_NAME] = JSON.parse(JSON.stringify(extension_settings["cat-translator-beta"]));
+    extension_settings[EXT_NAME]._betaMigrated = true;
 }
 let settings = Object.assign({}, defaultSettings, extension_settings[EXT_NAME]);
 
@@ -351,7 +354,7 @@ async function processMessage(id, isInput = false, abortSignal = null, silent = 
     if (stuckGlow.length > 0) {
         const startTime = parseInt(stuckGlow.attr('data-cat-glow-start') || '0');
         const elapsed = Date.now() - startTime;
-        if (startTime > 0 && elapsed > 60000) {
+        if (startTime > 0 && elapsed > 180000) {
             console.warn(`[CAT] 🔧 글로우 stuck 감지 (${Math.round(elapsed/1000)}s) → 강제 해제 후 재시도 #${msgId}`);
             stopGlow();
         } else {
@@ -360,12 +363,19 @@ async function processMessage(id, isInput = false, abortSignal = null, silent = 
     }
     startGlow();
     // 🚨 글로우 안전장치: 60초 후 자동 해제 (에러로 stuck 방지)
-    const glowTimeout = setTimeout(() => { stopGlow(); console.warn(`[CAT] ⚠️ 글로우 타임아웃 #${msgId}`); }, 60000);
+    const glowTimeout = setTimeout(() => { stopGlow(); console.warn(`[CAT] ⚠️ 글로우 타임아웃 #${msgId}`); }, 180000); // 🚨 beta.3: 장문+재시도는 60초를 정상 초과 → 조기 소등이 유저 재탭·중복 실행 유발
     let historyShown = false;
     // 🚨 beta.9: 외부 signal(벌크 등) 없으면 자체 중단 컨트롤러 생성 — 수동/자동 모두 버튼 탭으로 중단 가능
     // (isAutoTriggered 판정·조기 return 이후 시점에 등록해 레지스트리 누수 방지)
     let _ownAbortCtrl = null;
     if (!abortSignal) {
+        // 🚨 beta.3: 같은 메시지에 진행 중인 번역이 있으면 먼저 중단 — 글로우 소등 후
+        // 재탭 시 기존 번역이 도는 채로 새 번역이 겹쳐 돌던 동시 실행 차단
+        const staleCtrl = _activeTranslationAborts.get(msgId);
+        if (staleCtrl && !staleCtrl.signal.aborted) {
+            console.warn(`[CAT] ⛔ 기존 진행 중 번역 중단 후 새로 시작 #${msgId}`);
+            staleCtrl.abort();
+        }
         _ownAbortCtrl = new AbortController();
         abortSignal = _ownAbortCtrl.signal;
         _activeTranslationAborts.set(msgId, _ownAbortCtrl);
@@ -882,57 +892,11 @@ function revertMessage(id) {
 }
 function detectDir(text) { return detectLanguageDirection(text, settings); }
 
-async function findEnabledStableTranslator() {
-    // 🚨 정식판 빌드: 이 가드는 베타 전용 (자기 자신을 감지해 자멸하므로 무력화)
-    // 동시설치 시엔 베타 쪽이 스스로 로드를 양보함
-    return null;
-    // eslint-disable-next-line no-unreachable
-    try {
-        const extensionsModule = await import('../../../../scripts/extensions.js');
-        const extensionNames = Array.isArray(extensionsModule.extensionNames)
-            ? extensionsModule.extensionNames
-            : [];
-        const disabledExtensions = new Set(extension_settings.disabledExtensions || []);
-
-        for (const name of extensionNames) {
-            let manifest = typeof extensionsModule.getExtensionManifest === 'function'
-                ? extensionsModule.getExtensionManifest(name)
-                : null;
-            if (!manifest) {
-                try {
-                    const response = await fetch(`/scripts/extensions/${name}/manifest.json`, { cache: 'no-store' });
-                    if (response.ok) manifest = await response.json();
-                } catch (e) { /* 구버전 ST fallback 실패는 무시 */ }
-            }
-            if (manifest?.name !== 'cat-translator') continue;
-
-            const found = typeof extensionsModule.findExtension === 'function'
-                ? extensionsModule.findExtension(name)
-                : null;
-            const enabled = found ? found.enabled : !disabledExtensions.has(name);
-            if (enabled) {
-                return {
-                    name,
-                    displayName: manifest.display_name || name
-                };
-            }
-        }
-    } catch (e) {
-        console.warn('[CAT] 정식판 활성 상태 확인 실패:', e);
-    }
-
-    return $('#cat-trans-container').length > 0
-        ? { name: 'runtime', displayName: '기존 Translator' }
-        : null;
-}
-
 jQuery(async () => {
-    const stableTranslator = await findEnabledStableTranslator();
-    if (stableTranslator) {
-        console.error(`[CAT] ${stableTranslator.displayName} 활성 감지 → 베타 로드 중단`);
-        catNotify('🙀 정식판과 베타가 모두 켜져 있어 베타를 중단했어요. 둘 중 하나만 활성화해주세요.', 'warning');
-        return;
-    }
+    // 🚨 v1.1.2 정식 승격: 베타 시절의 "정식판 감지 → 자기 중단" 가드 제거.
+    // 이 확장이 이제 정식(cat-translator)이므로 가드를 유지하면 자기 자신을
+    // 감지해 로드가 중단된다. 정식+베타 동시 활성 시에는 베타 쪽 가드가
+    // 정식 manifest를 감지해 베타가 스스로 양보하므로 충돌 없음.
 
     try { await initCache(); console.log('[CAT] 🐱 IndexedDB 캐시 초기화 완료'); } catch (e) { console.warn('[CAT] IndexedDB 초기화 실패, 메모리 캐시로 대체:', e); }
     setupSettingsPanel(settings, stContext, saveSettings); setupDragDictionary(settings, saveSettings); setupMutationObserver(processMessage, revertMessage, settings, stContext);
@@ -957,14 +921,12 @@ jQuery(async () => {
             processMessage(msgId, false, null, false, true);
         }, 500);
     });
-    stContext.eventSource.on(stContext.event_types.USER_MESSAGE_RENDERED, (d) => {
+    stContext.eventSource.on(stContext.event_types.USER_MESSAGE_RENDERED, async (d) => {
         if (settings.autoMode === 'none' || settings.autoMode === 'output') return;
         const msgId = typeof d === 'object' ? d.messageId : d;
         const renderedChatRef = getLiveChat();
-        setTimeout(() => {
-            if (getLiveChat() !== renderedChatRef) return;
-            processMessage(msgId, true, null, false, true);
-        }, 500);
+        if (getLiveChat() !== renderedChatRef) return;
+        await processMessage(msgId, true, null, false, true);
     });
     
     // 🚨 메시지 편집 직접 감지 (옵저버 백업) — afterEditMode 'auto'/'notify' 안전 트리거
@@ -1173,7 +1135,7 @@ jQuery(async () => {
             $('.cat-mes-trans-btn .cat-emoji-icon.cat-glow-anim, #cat-input-btn .cat-emoji-icon.cat-glow-anim').each(function () {
                 const startTime = parseInt($(this).attr('data-cat-glow-start') || '0');
                 const elapsed = Date.now() - startTime;
-                if (startTime > 0 && elapsed > 60000) {
+                if (startTime > 0 && elapsed > 180000) {
                     $(this).removeClass('cat-glow-anim').removeAttr('data-cat-glow-start');
                     console.warn(`[CAT] 🔧 visibility 복귀 → stuck 글로우 정리 (${Math.round(elapsed/1000)}s)`);
                 }

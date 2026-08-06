@@ -2,7 +2,7 @@
 // 🐱 Translator v1.1.0 - translator.js
 // ============================================================
 import { secret_state, SECRET_KEYS } from '../../../../scripts/secrets.js';
-import { cleanResult, catNotify, detectLanguageDirection, stripMetaForDetection, getThemeEmoji, getCompletionEmoji, getCacheModelKey, applyPreReplaceWithCount, analyzeSpeechPatterns, splitLiteralAppendix, protectTranslationStructure, restoreTranslationStructure, restoreTranslationTokens, validateTranslationStructure, analyzeLanguage, isClearlyLanguage } from './utils.js';
+import { cleanResult, catNotify, detectLanguageDirection, stripMetaForDetection, getThemeEmoji, getCompletionEmoji, getCacheModelKey, applyPreReplaceWithCount, analyzeSpeechPatterns, splitLiteralAppendix, revealSpecialChars, auditDividerLines, protectTranslationStructure, restoreTranslationStructure, restoreTranslationTokens, validateTranslationStructure, normalizeBilingualMacroCopiesForValidation, analyzeLanguage, isClearlyLanguage } from './utils.js';
 import { deleteCached, getCached, setCached } from './cache.js';
 
 const LEGACY_SYSTEM_SHIELD = `[ABSOLUTE DIRECTIVE - VIOLATION = FAILURE]
@@ -488,6 +488,12 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
         const detected = detectLanguageDirection(text, settings);
         isToEnglish = detected.isToEnglish; targetLang = detected.targetLang;
     }
+    const structureValidationOptions = {
+        allowBilingualMacroCopies:
+            (settings.dialogueBilingual || 'off') === 'ko-en' && targetLang === 'Korean',
+        // 🚨 beta.5: 절단 소스에서만 구분선 '증가'를 하드 실패로 유지 (창작 카나리아)
+        sourceTruncated: detectTruncatedSource(text)
+    };
 
     // 메타 토큰을 제외한 주 언어가 목표 언어라고 확실할 때만 같은 언어로 판정한다.
     const bilingualActive = settings.dialogueBilingual && settings.dialogueBilingual !== 'off';
@@ -511,7 +517,7 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
         const cached = await getCached(text, targetLang, modelKey, cacheScopeKey);
         if (cached) {
             const cachedSplit = splitLiteralAppendix(cached.translated);
-            const cachedStructure = validateTranslationStructure(text, cachedSplit.natural);
+            const cachedStructure = validateTranslationStructure(text, cachedSplit.natural, structureValidationOptions);
             if (cachedStructure.boundaryRecovery) {
                 console.warn('[CAT] 🧹 캐시의 이전 문맥 경계 코드블럭 제거 후 구조 검증 통과');
             }
@@ -585,7 +591,7 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
         targetLang,
         isToEnglish,
         hasStructure: structureProtection.hasStructure ||
-            /```|<!--|<\/?[a-zA-Z][^>]*>|\{\{[\s\S]*?\}\}|^(?:---|___|\*\*\*)\s*$/m.test(sourceText),
+            /```|<!--|<\/?[a-zA-Z][^>]*>|\{\{[\s\S]*?\}\}|^(?:-{3,}|_{3,}|\*{3,})[\t \u00A0]*$/m.test(sourceText),
         hasContext: contextMessages.length > 0
     });
 
@@ -618,20 +624,51 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
         _lastDebugLog.recovery = message;
         console.warn(`[CAT] 🧹 ${message}`);
     };
+
+    // 🚨 beta.5: 구분선 소프트 허용 등 "통과했지만 알아둘 것"을 디버그 로그에 축적
+    const recordSoftNote = (note) => {
+        if (!note) return;
+        _lastDebugLog.recovery = _lastDebugLog.recovery
+            ? `${_lastDebugLog.recovery} / ${note}`
+            : note;
+    };
     
-    const retryRejectedTranslation = async (reason, finalMessage = null) => {
+    const retryRejectedTranslation = async (reason, finalMessage = null, detail = null, salvageText = null) => {
         _lastDebugLog.error = `응답 검증 실패: ${reason}`;
+        // 🚨 beta.3 디버그: 실패 상세(어디가 어떻게 다른지) + 시도별 이력 체인 기록
+        if (detail) _lastDebugLog.validationDetail = detail;
+        _lastDebugLog.attempts = [
+            ...(Array.isArray(_lastDebugLog.attempts) ? _lastDebugLog.attempts : []),
+            {
+                time: new Date().toLocaleTimeString(),
+                path: _structureFallback ? 'legacy(토큰 미치환)' : '토큰 보호',
+                reason,
+                detail: detail || null
+            }
+        ];
         if (_qualityRetry < 1) {
-            const useStructureFallback = !_structureFallback &&
+            // 🚨 beta.3: 잘린 소스 + 구조 증가 = 모델이 절단점 이후를 창작한 것.
+            // legacy 폴백(토큰 미치환)으로는 원인이 해소되지 않으므로,
+            // 같은 경로에서 "절단점에서 멈춰라"를 정조준한 재시도 사유를 쓴다.
+            const growthMatch = String(reason).match(/개수 불일치: (\d+)→(\d+)/);
+            const inventedBeyondCutoff = detectTruncatedSource(text) && (
+                /구조 토큰 중복/.test(reason) ||
+                (growthMatch && parseInt(growthMatch[2], 10) > parseInt(growthMatch[1], 10))
+            );
+            let useStructureFallback = !inventedBeyondCutoff && !_structureFallback &&
                 structureProtection.hasStructure &&
                 isStructureCompatibilityFailure(reason);
-            const nextRetryReason = useStructureFallback
-                ? 'The previous response could not preserve compatibility markers. Translate the original text directly and preserve every code fence, tag, divider, line break, indentation, and structured key exactly.'
-                : reason;
+            const nextRetryReason = inventedBeyondCutoff
+                ? 'You added content beyond the cutoff of the truncated source (extra dividers/sections). The source ends mid-sentence by design. Translate only up to that exact cutoff and stop there. Ending abruptly is correct.'
+                : useStructureFallback
+                    ? 'The previous response could not preserve compatibility markers. Translate the original text directly and preserve every code fence, tag, divider, line break, indentation, and structured key exactly.'
+                    : reason;
             console.warn(
-                useStructureFallback
-                    ? `[CAT] 🔁 구조 토큰 비호환 → 구버전 방식으로 1회 재시도: ${reason}`
-                    : `[CAT] 🔁 응답 검증 실패 → 1회 재시도: ${reason}`
+                inventedBeyondCutoff
+                    ? `[CAT] 🔁 절단 소스 초과 창작 감지 → 절단점 준수 재시도: ${reason}`
+                    : useStructureFallback
+                        ? `[CAT] 🔁 구조 토큰 비호환 → 구버전 방식으로 1회 재시도: ${reason}`
+                        : `[CAT] 🔁 응답 검증 실패 → 1회 재시도: ${reason}`
             );
             return fetchTranslation(text, settings, stContext, {
                 ...options,
@@ -648,6 +685,21 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
             _lastDebugLog.quality = _softCandidate.quality;
             return acceptTranslation(_softCandidate.cleaned, _softCandidate.thought);
         }
+        // 🚨 beta.5: 병기 구조 붕괴로만 최종 실패한 경우 → 번역을 버리지 않고
+        // 괄호를 벗겨 순수 한국어로 강등해서 표시한다 (우아한 강등).
+        // "번역이 아예 안 됨"이 사용자에게 가장 나쁜 결말이라는 원칙.
+        if (salvageText && /한영 병기 구조 붕괴/.test(String(reason))) {
+            const degraded = degradeBilingualToKorean(salvageText);
+            if (degraded && degraded.trim() && /[가-힣]/.test(degraded)) {
+                console.warn('[CAT] 🩹 병기 형식 복구 실패 → 한국어만 남겨 표시');
+                recordSoftNote('병기 형식 실패 → 한국어 전용으로 강등 표시');
+                if (!silent) {
+                    catNotify(`${getThemeEmoji()} 병기 형식이 맞지 않아 이번 메시지는 한국어만 표시해요.`, 'warning');
+                }
+                _lastDebugLog.cleaned = degraded;
+                return acceptTranslation(degraded, null);
+            }
+        }
         if (!silent) {
             const shortReason = String(reason || '알 수 없는 형식 오류')
                 .replace(/\s+/g, ' ')
@@ -662,7 +714,11 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
 
     try {
         let result = ""; let thought = null;
-        _lastDebugLog = { timestamp: new Date().toLocaleTimeString(), mode: '', model: '', prompt: '', rawResponse: '', cleaned: '', error: null, thought: null, recovery: null };
+        // 🚨 beta.4: 시도 이력 상속은 '같은 원문의 재시도'일 때만 — 재시도 여부만 보면
+    // 다른 메시지의 이력이 섞여 들어옴 (2:13 로그에서 실제 오염 관측)
+    const currentRunKey = hashScopeValue(text);
+    const inheritedAttempts = (retryReason && _lastDebugLog.runKey === currentRunKey && Array.isArray(_lastDebugLog.attempts)) ? _lastDebugLog.attempts : [];
+    _lastDebugLog = { timestamp: new Date().toLocaleTimeString(), mode: '', model: '', prompt: '', rawResponse: '', cleaned: '', error: null, thought: null, recovery: null, validationDetail: null, attempts: inheritedAttempts, runKey: currentRunKey };
         
         if (settings.profile && stContext.ConnectionManagerRequestService) {
             // 🚨 프로필 모드: systemInstruction 미지원 → 유저 메시지에 합침
@@ -677,7 +733,7 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
             }
             
             _lastDebugLog.mode = '프로필';
-            _lastDebugLog.model = settings.profile.substring(0, 20) + '...';
+            _lastDebugLog.model = '비공개';
             _lastDebugLog.prompt = fullPrompt;
             
             // 🚨 프로필 모드 빈 응답 재시도 (Gemini 3.5/3.0 Flash thinking 대응)
@@ -691,7 +747,7 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
             
             for (let attempt = 0; attempt < MAX_PROFILE_RETRIES; attempt++) {
                 // 🚨 beta.9: 중단 요청 시 프로필 모드는 재시도 진입 전 즉시 종료
-                if (abortSignal?.aborted) { console.log('[CAT] 🔴 번역 중단됨 (프로필 모드, 시도 전)'); return null; }
+                if (abortSignal?.aborted) { console.log('[CAT] 🔴 번역 중단됨 (프로필 모드, 시도 전)'); _lastDebugLog.error = '중단됨 (사용자 중단 또는 새 번역 시작)'; return null; }
                 try {
                     // 🚨 재시도 시 토큰 증량 (thinking 모델이 토큰 부족으로 빈 응답 주는 케이스 대응)
                     // attempt 0: 기본값, attempt 1: 2배, attempt 2: 4배 (최대 32768)
@@ -702,7 +758,7 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
                     
                     const response = await stContext.ConnectionManagerRequestService.sendRequest(settings.profile, [{ role: "user", content: fullPrompt }], attemptMaxTokens);
                     // 🚨 beta.9: 프로필 요청은 도중 취소가 불가 → 도착한 결과를 폐기하는 방식으로 중단 처리
-                    if (abortSignal?.aborted) { console.log('[CAT] 🔴 번역 중단됨 (프로필 모드, 결과 폐기)'); return null; }
+                    if (abortSignal?.aborted) { console.log('[CAT] 🔴 번역 중단됨 (프로필 모드, 결과 폐기)'); _lastDebugLog.error = '중단됨 (사용자 중단 또는 새 번역 시작)'; return null; }
                     
                     // 🚨 응답 필드 다양화 시도 (ST가 reasoning_content / content / text 등 다양한 형식 반환 가능)
                     if (typeof response === 'string') {
@@ -869,7 +925,7 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
             
             const fetchBody = { systemInstruction: { parts: [{ text: activeSystemInstruction }] }, contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig, safetySettings: SAFETY_SETTINGS };
             _lastDebugLog.mode = '직접 연결';
-            _lastDebugLog.model = actualModel;
+            _lastDebugLog.model = '비공개';
             _lastDebugLog.prompt = prompt;
             console.log(`[CAT] 🧠 Direct 모드: systemInstruction 분리 | 모델: ${actualModel} | temp: ${temperature} | maxTokens: ${maxTokens}`);
             
@@ -916,25 +972,27 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
                 return await retryRejectedTranslation('직역 병기 마커 또는 직역 본문 누락');
             }
             
-            const naturalRestored = restoreTranslationStructure(initialLiteralSplit.natural, structureProtection);
+            const naturalRestored = restoreTranslationStructure(initialLiteralSplit.natural, structureProtection, structureValidationOptions);
             if (!naturalRestored.ok) {
-                return await retryRejectedTranslation(naturalRestored.reason);
+                return await retryRejectedTranslation(naturalRestored.reason, null, naturalRestored.detail);
             }
             recordBoundaryRecovery(naturalRestored.boundaryRecovery);
+            recordSoftNote(naturalRestored.softNote);
             const literalRestored = restoreTranslationTokens(initialLiteralSplit.literal, structureProtection);
             if (!literalRestored.ok) {
-                return await retryRejectedTranslation(literalRestored.reason);
+                return await retryRejectedTranslation(literalRestored.reason, null, literalRestored.detail);
             }
             cleaned = `${naturalRestored.text}\n<<<CAT_LITERAL>>>\n${literalRestored.text}`;
         } else {
             if (initialLiteralSplit.literal && !/CAT_LITERAL/i.test(text)) {
                 return await retryRejectedTranslation('일반 번역에 직역 병기 파트가 섞임');
             }
-            const restored = restoreTranslationStructure(cleaned, structureProtection);
+            const restored = restoreTranslationStructure(cleaned, structureProtection, structureValidationOptions);
             if (!restored.ok) {
-                return await retryRejectedTranslation(restored.reason);
+                return await retryRejectedTranslation(restored.reason, null, restored.detail);
             }
             recordBoundaryRecovery(restored.boundaryRecovery);
+            recordSoftNote(restored.softNote);
             cleaned = restored.text;
         }
         
@@ -957,11 +1015,12 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
             : naturalCleaned;
 
         if (_structureFallback) {
-            const fallbackStructure = validateTranslationStructure(text, naturalCleaned);
+            const fallbackStructure = validateTranslationStructure(text, naturalCleaned, structureValidationOptions);
             if (!fallbackStructure.ok) {
-                return await retryRejectedTranslation(fallbackStructure.reason);
+                return await retryRejectedTranslation(fallbackStructure.reason, null, fallbackStructure.detail);
             }
             recordBoundaryRecovery(fallbackStructure.boundaryRecovery);
+            recordSoftNote(fallbackStructure.softNote);
             if (fallbackStructure.text !== naturalCleaned) {
                 if (fallbackStructure.repairedKeys > 0) {
                     console.log(`[CAT] 🔧 구조 키 ${fallbackStructure.repairedKeys}개 자동 복원`);
@@ -975,8 +1034,9 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
         
         const validation = validateTranslationPayload(cleaned, text, settings, targetLang);
         if (!validation.ok) {
-            return await retryRejectedTranslation(validation.reason);
+            return await retryRejectedTranslation(validation.reason, null, validation.detail, cleaned);
         }
+        recordSoftNote(validation.softNote);
 
         let quality = assessTranslationQuality(cleaned, text, settings, targetLang);
         if (!_softCandidate && quality.retry && _qualityRetry < 1) {
@@ -1179,10 +1239,35 @@ function postProcessBilingualText(text, bilingualMode) {
                 console.log('[CAT] 🔄 병기 역순 감지 → 자동 교정');
                 return `"${eng.trim()} [${kor.trim()}]${rest}"`;
             });
-            // 🚨 v1.1.2: "영어" "[한국어]" 분리 출력 병합 (괄호가 별도 따옴표로 밀려난 케이스)
-            processed = processed.replace(/"([^"]*[A-Za-z][^"]*)"\s*"\[([^\]]*[가-힣][^\]]*)\]"/g, '"$1 [$2]"');
-            processed = processed.replace(/"([^"]*?)"\s*\[([^\]]+)\]/g, '"$1 [$2]"');
-            processed = processed.replace(/\."\s*\[/g, '. [');
+            // 🚨 beta.5: 따옴표 꼬임 버그 수정 — 기존 첫 규칙이 영문(A-Za-z) 포함을
+            // 요구해서 한국어 인용구("영어" 같은)를 거르지 못했고, 그 결과 다음 규칙이
+            // 닫는따옴표+여는따옴표를 한 쌍으로 오인해 "…"  […]"" 꼴로 따옴표를
+            // 꼬아놓았음(실측 재현). 내용 제한을 풀어 순서 하자를 제거한다.
+            processed = processed.replace(/"([^"]+)"\s*"\[([^\]]*[가-힣][^\]]*)\]"/g, '"$1 [$2]"');
+            // 괄호가 따옴표 밖으로 밀린 케이스: 실제 내용이 있는 인용구 + 한국어 괄호만
+            // 병합 (공백뿐인 가짜 인용구 오인 방지, [숫자] 각주류 오병합 방지)
+            processed = processed.replace(/"([^"]*[^\s"][^"]*)"\s*\[([^\]]*[가-힣][^\]]*)\]/g, '"$1 [$2]"');
+            // 잔여 케이스(마침표 뒤 괄호): 한국어 괄호일 때만 — [숫자] 각주의 닫는따옴표를 먹지 않게
+            processed = processed.replace(/\."\s*\[(?=[^\]]*[가-힣])/g, '. [');
+            // 🚨 beta.5: "한국어 [한국어]" 중복 병기 접기 — 모델이 영어 원문 유지에
+            // 실패하고 한국어 번역을 이중으로 뱉은 케이스. 바깥이 한국어이고 영문이
+            // 없으면(병기 형식의 원문 슬롯이 비어있다는 뜻) 괄호 안 한국어만 남긴다.
+            // 짧은 영문 단어(고유명사 등)가 섞인 한국어는 오탐 방지를 위해 건드리지 않음.
+            const beforeKoDup = processed;
+            const collapseKoDup = (open, close) => {
+                const pattern = new RegExp(
+                    `${open}([^${close}\\[\\]]*[가-힣][^${close}\\[\\]]*?)\\s*\\[([^\\]]*[가-힣][^\\]]*)\\]\\s*${close}`,
+                    'g'
+                );
+                processed = processed.replace(pattern, (match, outer, inner) => {
+                    if (/[A-Za-z]/.test(outer)) return match;
+                    return `${open}${inner.trim()}${close}`;
+                });
+            };
+            collapseKoDup('"', '"');
+            collapseKoDup('「', '」');
+            collapseKoDup('『', '』');
+            if (beforeKoDup !== processed) console.log('[CAT] 🧹 한국어[한국어] 중복 병기 접기');
             return processed;
         }
         
@@ -1192,6 +1277,117 @@ function postProcessBilingualText(text, bilingualMode) {
         processed = processed.replace(/「([^」<>`]{1,200}?[a-zA-Z][^」<>`]{1,200}?)\s*\[([^\]<>`]{1,30}[가-힣][^\]<>`]{0,30})\]([^」<>`]{0,50}?)」/g, '「$2$3」');
         processed = processed.replace(/『([^』<>`]{1,200}?[a-zA-Z][^』<>`]{1,200}?)\s*\[([^\]<>`]{1,30}[가-힣][^\]<>`]{0,30})\]([^』<>`]{0,50}?)』/g, '『$2$3』');
         if (beforeClean !== processed) console.log('[CAT] 🧹 병기 OFF 모드 - 잔존 병기 패턴 자동 정리');
+        return processed;
+    });
+}
+
+function collectQuotedSegmentsOutsideFences(text) {
+    const source = String(text || '');
+    const masked = source
+        .replace(/```[^\n]*\n[\s\S]*?```/g, match => ' '.repeat(match.length))
+        .replace(/<\/?[a-zA-Z][^>]*>/g, match => ' '.repeat(match.length))
+        // 🚨 beta.3: 작가 오타(“…")·모델 정규화("…”)로 커리/스트레이트가 섞이면
+        // 짝맞추기가 통째로 밀리므로 수집 단계에서 통일 (1:1 치환이라 index 불변)
+        .replace(/[“”]/g, '"');
+    const patterns = [
+        { type: 'double', regex: /"([^"]*)"/g },
+        { type: 'curly', regex: /“([^”]*)”/g },
+        { type: 'corner', regex: /「([^」]*)」/g },
+        { type: 'white-corner', regex: /『([^』]*)』/g }
+    ];
+    const segments = [];
+    for (const { type, regex } of patterns) {
+        for (const match of masked.matchAll(regex)) {
+            segments.push({ type, content: match[1], index: match.index });
+        }
+    }
+    return segments.sort((a, b) => a.index - b.index);
+}
+
+function validateKoEnBilingualDialogue(original, output) {
+    const sourceDialogues = collectQuotedSegmentsOutsideFences(original)
+        .filter(item =>
+            /[A-Za-z]/.test(item.content) &&
+            !/\[[^\]]*[가-힣][^\]]*\]\s*$/.test(item.content)
+        );
+    if (sourceDialogues.length === 0) return { ok: true, reason: null };
+
+    // 🚨 beta.3: 모델의 문장부호 정규화(’→', …→..., —→-) 한 글자에 exact match가
+    // 깨져 무한 재시도되던 것 방지 — 비교 전에 양쪽을 같은 표기로 맞춘다.
+    const canonizeForCompare = (value) => String(value || '')
+        .replace(/[’‘]/g, "'")
+        .replace(/…/g, '...')
+        .replace(/[—–]/g, '-')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const outputDialogues = collectQuotedSegmentsOutsideFences(output);
+    let outputIndex = 0;
+    for (let i = 0; i < sourceDialogues.length; i++) {
+        const sourceDialogue = sourceDialogues[i];
+        let matched = false;
+        for (; outputIndex < outputDialogues.length; outputIndex++) {
+            const candidate = outputDialogues[outputIndex];
+            if (candidate.type !== sourceDialogue.type) continue;
+            const bilingual = candidate.content.match(/^([\s\S]*?)\s+\[([^\]]*[가-힣][^\]]*)\]\s*$/);
+            if (!bilingual) {
+                // 🚨 beta.3: 서술 속 짧은 인용구(“surprisingly competent.” 등)를 모델이
+                // 대사가 아니라고 판단해 한국어로만 번역한 경우 허용. 짧은 대사의 병기
+                // 반쪽 누락과 구분은 불가하지만, 오탐 무한 재시도가 더 큰 손해다.
+                if (sourceDialogue.content.length <= 80 &&
+                    !/[A-Za-z]/.test(candidate.content) && /[가-힣]/.test(candidate.content)) {
+                    matched = true;
+                    outputIndex++;
+                    break;
+                }
+                continue;
+            }
+            if (canonizeForCompare(bilingual[1]) !== canonizeForCompare(sourceDialogue.content)) continue;
+            matched = true;
+            outputIndex++;
+            break;
+        }
+        if (!matched) {
+            // 🚨 beta.3 디버그: 어느 원문 대사가, 그 시점 어떤 출력 후보들과 대조되다 실패했는지
+            const nearby = outputDialogues.slice(Math.max(0, outputIndex - 2), outputIndex + 1)
+                .map(seg => JSON.stringify(revealSpecialChars(seg.content).slice(0, 120)))
+                .join('\n');
+            return {
+                ok: false,
+                reason: `한영 병기 구조 붕괴: 영어 원문 대사 또는 같은 따옴표 안의 한국어 병기 누락 (대사 ${i + 1})`,
+                detail: `실패한 원문 대사 ${i + 1}: ${JSON.stringify(revealSpecialChars(sourceDialogue.content).slice(0, 160))}\n대조 지점 근처 출력 인용구:\n${nearby || '(남은 출력 인용구 없음)'}`
+            };
+        }
+    }
+    return { ok: true, reason: null };
+}
+
+// 🚨 beta.5: 병기 구조가 최종 실패했을 때의 우아한 강등(graceful degradation).
+// "English [한국어]" → "한국어" 로 괄호를 벗겨 순수 한국어 번역만 남긴다.
+// 병기는 잃지만 번역 자체는 살아남음 — "번역 안 됨"보다 백배 나은 결말.
+// 한 인용구에 괄호가 여러 개면(끊긴 병기) 한국어들을 이어붙인다.
+// 코드펜스 안은 건드리지 않는다.
+function degradeBilingualToKorean(text) {
+    const stripPair = (open, close) => (segment) => segment.replace(
+        new RegExp(`${open}([^${close}]*\\[[^\\]]*[가-힣][^\\]]*\\][^${close}]*)${close}`, 'g'),
+        (match, inner) => {
+            const koreanParts = [];
+            let leftover = inner.replace(/([^\[\]]*?)\s*\[([^\]]*[가-힣][^\]]*)\]/g, (mm, pre, ko) => {
+                koreanParts.push(ko.trim());
+                return '';
+            });
+            leftover = leftover.replace(/\s+/g, ' ').trim();
+            if (koreanParts.length === 0) return match;
+            const joined = koreanParts.join(' ') + (leftover ? ` ${leftover}` : '');
+            return `${open}${joined}${close}`;
+        }
+    );
+    return transformOutsideFencedBlocks(String(text || ''), (segment) => {
+        let processed = segment;
+        // 커리 따옴표를 스트레이트로 통일해 짝 계산 밀림 방지 (강등 시점에는 안전)
+        processed = processed.replace(/[“”]/g, '"');
+        processed = stripPair('"', '"')(processed);
+        processed = stripPair('「', '」')(processed);
+        processed = stripPair('『', '』')(processed);
         return processed;
     });
 }
@@ -1246,19 +1442,51 @@ export function validateTranslationPayload(output, originalText, settings, targe
             return { ok: false, reason: '일반 번역에 대사 병기 형식이 섞임' };
         }
     }
+
+    if ((settings.dialogueBilingual || 'off') === 'ko-en' && targetLang === 'Korean') {
+        const bilingualValidation = validateKoEnBilingualDialogue(original, natural);
+        if (!bilingualValidation.ok) return bilingualValidation;
+    }
     
     const sourceStructure = countOutputStructure(original);
-    const outputStructure = countOutputStructure(natural);
-    if (sourceStructure.fences !== outputStructure.fences ||
+    const structureCheckedNatural =
+        (settings.dialogueBilingual || 'off') === 'ko-en' && targetLang === 'Korean'
+            ? normalizeBilingualMacroCopiesForValidation(natural)
+            : natural;
+    const outputStructure = countOutputStructure(structureCheckedNatural);
+    // 🚨 beta.5: 구분선은 증감 모두 소프트 허용으로 통일 (utils의 compareProtectedStructure와
+    // 같은 정책). 실측 오류(8→7, 8→9, 0→5)의 주범이 구분선 1:1 강제였음.
+    // 감소 ±2 제한도 철폐 — 펜스/태그가 온전하면 구분선 손실은 미용상 흠집.
+    // 예외: 절단된 소스에서 구분선 '증가'만은 절단점 너머 창작의 카나리아라 하드 유지
+    // → 절단점 준수 재시도(inventedBeyondCutoff)가 발동하게 한다.
+    let dividerSoftNote = null;
+    const dividerOnlyDiff = sourceStructure.fences === outputStructure.fences &&
+        sourceStructure.tags === outputStructure.tags &&
+        sourceStructure.rules !== outputStructure.rules &&
+        !(outputStructure.rules > sourceStructure.rules && detectTruncatedSource(originalText));
+    if (dividerOnlyDiff) {
+        dividerSoftNote = `구분선 ${sourceStructure.rules}→${outputStructure.rules} ` +
+            `${outputStructure.rules < sourceStructure.rules ? '감소' : '증가'} — 소프트 허용 (번역 유지)`;
+        console.warn(`[CAT] ⚠️ ${dividerSoftNote}`);
+    }
+    if (!dividerOnlyDiff && (sourceStructure.fences !== outputStructure.fences ||
         sourceStructure.tags !== outputStructure.tags ||
-        sourceStructure.rules !== outputStructure.rules) {
+        sourceStructure.rules !== outputStructure.rules)) {
         return {
             ok: false,
-            reason: `구조 개수 불일치: 펜스 ${sourceStructure.fences}→${outputStructure.fences}, 태그 ${sourceStructure.tags}→${outputStructure.tags}, 구분선 ${sourceStructure.rules}→${outputStructure.rules}`
+            reason: `구조 개수 불일치: 펜스 ${sourceStructure.fences}→${outputStructure.fences}, 태그 ${sourceStructure.tags}→${outputStructure.tags}, 구분선 ${sourceStructure.rules}→${outputStructure.rules}`,
+            detail: (() => {
+                if (sourceStructure.rules === outputStructure.rules) return null;
+                const srcAudit = auditDividerLines(original);
+                const outAudit = auditDividerLines(structureCheckedNatural);
+                return `원문 구분선 매칭 ${srcAudit.matched.length}개 / 출력 매칭 ${outAudit.matched.length}개` +
+                    (outAudit.nearMiss.length ? `\n⚠️ 출력의 매칭 실패 유사 구분선:\n${outAudit.nearMiss.slice(0, 5).join('\n')}` : '') +
+                    (srcAudit.nearMiss.length ? `\n⚠️ 원문의 매칭 실패 유사 구분선:\n${srcAudit.nearMiss.slice(0, 5).join('\n')}` : '');
+            })()
         };
     }
     
-    return { ok: true, reason: null };
+    return { ok: true, reason: null, softNote: dividerSoftNote };
 }
 
 export function assessTranslationQuality(output, originalText, settings, targetLang) {
@@ -1379,7 +1607,7 @@ function countOutputStructure(text) {
         fences: (source.match(/```/g) || []).length,
         backticks: (source.match(/`/g) || []).length,
         tags: (source.match(/<!--|-->|<\/?[a-zA-Z][^>]*>|\{\{[\s\S]*?\}\}/g) || []).length,
-        rules: (source.match(/^(?:[\t ]*)(?:---|___|\*\*\*)(?:[\t ]*)$/gm) || []).length
+        rules: (source.match(/^(?:[\t \u00A0]*)(?:-{3,}|_{3,}|\*{3,})(?:[\t \u00A0]*)$/gm) || []).length
     };
 }
 
@@ -1431,6 +1659,29 @@ function clipPromptText(text, maxLength) {
     return `${source.slice(0, side)}\n...[context clipped]...\n${source.slice(-side)}`;
 }
 
+// 🚨 beta.3: 소스 절단 감지 — RP측 max tokens에 잘린 메시지는 문장 중간에서 끝남.
+// 잘린 소스를 받은 번역 모델은 "중간에 멈추면 틀린 것 같아서" 이야기를 이어 쓰고
+// (엔딩 창작 → 구조 요소 증가 → 검증 탈락), 이를 막으려면 금지가 아니라
+// "끊긴 데서 멈추는 게 정답"이라는 허가를 줘야 한다. 오탐 비용이 거의 없음:
+// 온전한 소스에 이 지시가 붙어도 "끝까지 번역하고 멈춰라" = 평소 동작 그대로라서.
+function detectTruncatedSource(text) {
+    const source = String(text || '').trimEnd();
+    if (source.length < 200) return false;
+    const lines = source.split('\n');
+    let last = '';
+    for (let i = lines.length - 1; i >= 0; i--) {
+        if (lines[i].trim()) { last = lines[i].trim(); break; }
+    }
+    if (!last) return false;
+    // 구조 줄(디바이더/헤더/펜스/단독 토큰)은 원래 종결부호 없이 끝나므로 판정 제외
+    if (/^(---|\*\*\*|___|#{1,6}\s|```)/.test(last)) return false;
+    if (/^@@[A-Za-z0-9_]+_\d{4}@@$/.test(last)) return false;
+    // 마크다운 장식·닫는 따옴표류 제거 후, 글자/쉼표류로 끝나면 절단 의심
+    const stripped = last.replace(/[*_~`"'”’」』)\]]+$/g, '').trimEnd();
+    if (!stripped) return false;
+    return /[A-Za-z가-힣0-9,;:—–-]$/.test(stripped);
+}
+
 export function assemblePrompt(text, targetLang, isToEnglish, settings, options = {}) {
     const {
         prevTranslation = null,
@@ -1470,9 +1721,18 @@ Only inside fences explicitly marked YAML/JSON, keep machine-readable keys and p
     if (retryReason) {
         parts.push(`
 [RETRY - PREVIOUS RESPONSE WAS REJECTED]
-Reason: ${String(retryReason).substring(0, 180)}
+Reason: ${String(retryReason).substring(0, 400)}
 Fix that exact failure. Output only the translation payload.
 Do not print checks, arrows, source/output labels, explanations, or the word "Correct".`);
+    }
+
+    // 🚨 beta.3: 잘린 소스면 "끊긴 데서 멈추는 게 정답"이라는 허가 블록 주입
+    if (detectTruncatedSource(sourceText)) {
+        parts.push(`
+[TRUNCATED SOURCE]
+The source below was cut off mid-sentence by an upstream token limit. This is expected and normal.
+Translate faithfully up to the exact cutoff and stop where the source stops, even mid-sentence or mid-word.
+Ending abruptly at the cutoff is the correct behavior. Never finish the last sentence, and never add scenes, endings, dividers, or summaries beyond the cutoff.`);
     }
     
     if (settings.literalBilingual === 'on' && !isToEnglish) {
@@ -1977,6 +2237,12 @@ function getKoreanVoiceReference(message) {
         candidate = message.extra.original_mes;
     } else if (/[가-힣]/.test(message.extra?.display_text || '')) {
         candidate = message.extra.display_text;
+    } else if (!message.is_user && /[가-힣]/.test(message.mes || '')) {
+        // 🚨 beta.5: 폴백 — 이전 메시지의 번역이 검증 실패로 폐기되면 display_text가
+        // 없어 그 화자의 말투 참고가 통째로 사라졌음(말투 일관성 연쇄 붕괴).
+        // mes 자체가 한국어인 경우(다른 번역 확장 사용, 원문이 한국어인 카드 등)를
+        // 말투 참고로 구제한다. 영어 mes는 여기 걸리지 않으므로 오염 없음.
+        candidate = message.mes;
     }
     if (!candidate) return null;
     
