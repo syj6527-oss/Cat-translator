@@ -507,6 +507,9 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
             if (!silent) {
                 catNotify(`${getThemeEmoji()} 원문이 이미 ${targetLang === 'Korean' ? '한국어' : targetLang === 'English' ? '영어' : targetLang}입니다! 목표 언어를 확인해주세요!`, "warning");
             }
+            // 🚨 beta.9.2(로그): 이 조기 종료는 _lastDebugLog 초기화보다 앞이라
+            // 디버그 로그에 흔적이 안 남았음("조용히 꺼짐"의 정체). 생략 사유를 스탬프.
+            _lastDebugLog = { timestamp: new Date().toLocaleTimeString(), mode: '생략(같은 언어)', model: '', prompt: '', rawResponse: '', cleaned: '', error: `같은 언어 판정으로 번역 생략 (원문=목표=${targetLang}) — API 호출 없음`, thought: null, recovery: null };
             return null;
         }
     }
@@ -596,6 +599,8 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
     });
 
     const acceptTranslation = async (acceptedOutput, acceptedThought = null) => {
+        // 🚨 beta.9.1(로그): 성공 확정 시 이전 시도의 에러 스탬프 제거 — '중단됨'인데 성공 표시되던 혼동 해소
+        _lastDebugLog.error = null;
         const accepted = splitLiteralAppendix(acceptedOutput);
         await setCached(
             text,
@@ -718,7 +723,7 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
     // 다른 메시지의 이력이 섞여 들어옴 (2:13 로그에서 실제 오염 관측)
     const currentRunKey = hashScopeValue(text);
     const inheritedAttempts = (retryReason && _lastDebugLog.runKey === currentRunKey && Array.isArray(_lastDebugLog.attempts)) ? _lastDebugLog.attempts : [];
-    _lastDebugLog = { timestamp: new Date().toLocaleTimeString(), mode: '', model: '', prompt: '', rawResponse: '', cleaned: '', error: null, thought: null, recovery: null, validationDetail: null, attempts: inheritedAttempts, runKey: currentRunKey };
+    _lastDebugLog = { timestamp: new Date().toLocaleTimeString(), mode: '', model: '', prompt: '', rawResponse: '', cleaned: '', error: '(요청 진행 중 — 응답 대기. 이 문구가 계속 보이면 API/프록시가 응답을 안 준 것)', thought: null, recovery: null, validationDetail: null, attempts: inheritedAttempts, runKey: currentRunKey };
         
         if (settings.profile && stContext.ConnectionManagerRequestService) {
             // 🚨 프로필 모드: systemInstruction 미지원 → 유저 메시지에 합침
@@ -1032,6 +1037,22 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
             }
         }
         
+        // 🚨 beta.6: 병기 모드 한정 — 검증 전에 자동 조립을 시도한다.
+        // 모델이 영어를 빠뜨린 대사를 원문에서 복원해 STRICT_OK로 통과시키고,
+        // 조립 불가(개수 불일치 등)면 원본 그대로라 기존 강등 경로로 폴백된다.
+        // 직역 병기 섹션(<<<CAT_LITERAL>>>)은 분리해서 natural에만 조립을 적용
+        // — 직역 섹션의 따옴표가 카운트/정렬에 섞여 들어가는 오염을 차단.
+        if ((settings.dialogueBilingual || 'off') === 'ko-en' && targetLang === 'Korean') {
+            const splitForRepair = splitLiteralAppendix(cleaned);
+            const repairedNatural = repairBilingualByAlignment(text, splitForRepair.natural || '');
+            if (repairedNatural !== (splitForRepair.natural || '')) {
+                cleaned = splitForRepair.literal
+                    ? `${repairedNatural}\n<<<CAT_LITERAL>>>\n${splitForRepair.literal}`
+                    : repairedNatural;
+                recordSoftNote('병기 자동 조립 — 누락된 영어 원문 복원');
+            }
+        }
+
         const validation = validateTranslationPayload(cleaned, text, settings, targetLang);
         if (!validation.ok) {
             return await retryRejectedTranslation(validation.reason, null, validation.detail, cleaned);
@@ -1293,16 +1314,37 @@ function postProcessBilingualText(text, bilingualMode) {
 function collectQuotedSegmentsOutsideFences(text) {
     const source = String(text || '');
     const masked = source
-        .replace(/```[^\n]*\n[\s\S]*?```/g, match => ' '.repeat(match.length))
-        .replace(/<\/?[a-zA-Z][^>]*>/g, match => ' '.repeat(match.length))
+        // 🚨 beta.7: 마스킹 시 개행은 보존 — 공백으로만 바꾸면 펜스/태그를 관통해
+        // 한 줄처럼 이어지는 가짜 인용구가 생길 수 있음
+        .replace(/```[^\n]*\n[\s\S]*?```/g, match => match.replace(/[^\n]/g, ' '))
+        .replace(/<\/?[a-zA-Z][^>]*>/g, match => match.replace(/[^\n]/g, ' '))
         // 🚨 beta.3: 작가 오타(“…")·모델 정규화("…”)로 커리/스트레이트가 섞이면
         // 짝맞추기가 통째로 밀리므로 수집 단계에서 통일 (1:1 치환이라 index 불변)
-        .replace(/[“”]/g, '"');
+        .replace(/[“”]/g, '"')
+        // 🚨 beta.9: 인치 마스킹 정밀화 — 줄 단위로 여닫이 상태를 추적해,
+        // "여는 위치"에 있는 숫자+따옴표(6'5", 12")만 인치로 마스킹하고
+        // "닫는 위치"의 숫자+따옴표("I am 25", "Room 204")는 정상 대사로 보존.
+        // (beta.7의 (\d)" 일괄 마스킹이 숫자로 끝나는 대사까지 날리던 과잉 수정)
+        .split('\n').map(line => {
+            let out = ''; let open = false;
+            for (let k = 0; k < line.length; k++) {
+                const ch = line[k];
+                if (ch === '"') {
+                    if (!open && k > 0 && /\d/.test(line[k - 1])) { out += '\u2033'; continue; }
+                    open = !open;
+                }
+                out += ch;
+            }
+            return out;
+        }).join('\n');
     const patterns = [
-        { type: 'double', regex: /"([^"]*)"/g },
-        { type: 'curly', regex: /“([^”]*)”/g },
-        { type: 'corner', regex: /「([^」]*)」/g },
-        { type: 'white-corner', regex: /『([^』]*)』/g }
+        // 🚨 beta.7: 전 패턴 개행 금지 — 실제 대사는 한 줄. 따옴표 하나가 어긋나도
+        // 문단을 걸치는 가짜 세그먼트가 구조적으로 생기지 않게 한다.
+        // (멀티라인 인용은 미수집 → 검증 스킵, 관대한 방향)
+        { type: 'double', regex: /"([^"\n]*)"/g },
+        { type: 'curly', regex: /“([^”\n]*)”/g },
+        { type: 'corner', regex: /「([^」\n]*)」/g },
+        { type: 'white-corner', regex: /『([^』\n]*)』/g }
     ];
     const segments = [];
     for (const { type, regex } of patterns) {
@@ -1311,6 +1353,79 @@ function collectQuotedSegmentsOutsideFences(text) {
         }
     }
     return segments.sort((a, b) => a.index - b.index);
+}
+
+// 🚨 beta.6: 한영 병기 자동 조립 (Auto-Repair by Alignment)
+// 모델이 영어 원문을 빼먹고 한국어로만 번역한 대사를, 코드가 보유한 원문 영어와
+// 짝지어 "영어 [한국어]" 형태로 결정론적 복원한다. 영어를 추측하지 않고 원문에서
+// 그대로 가져오므로 안전하다. 단, 아래 게이트를 모두 통과할 때만 조립하고,
+// 하나라도 어긋나면 원본을 그대로 반환해 기존 강등 경로로 폴백한다.
+//   G1. 원문 영어 대사 존재
+//   G2. 원문 대사 수 == 출력 인용구 수 (1:1 정렬 보장, 누락/분할이면 폴백)
+//   G3. 같은 순번의 구분자(따옴표 종류) 호환
+//   G4. 출력이 미번역(영어 그대로)이 아니고, 한글이 존재
+// 개행 안전: 전역 재탐색 없이 수집된 offset 기준으로 뒤에서부터 치환한다.
+function repairBilingualByAlignment(original, output) {
+    const src = collectQuotedSegmentsOutsideFences(original).filter(s => /[A-Za-z]/.test(s.content));
+    const out = collectQuotedSegmentsOutsideFences(output);
+    if (src.length === 0) return output;                 // G1
+    if (src.length !== out.length) return output;        // G2
+
+    const canon = v => String(v || '')
+        .replace(/[’‘]/g, "'").replace(/…/g, '...').replace(/[—–]/g, '-')
+        .replace(/\s+/g, ' ').trim();
+    const delims = {
+        double: ['"', '"'], curly: ['“', '”'], corner: ['「', '」'], 'white-corner': ['『', '』']
+    };
+    const repairs = [];
+
+    for (let i = 0; i < src.length; i++) {
+        const s = src[i], o = out[i];
+        if (s.type !== o.type) return output;            // G3: 구분자 불일치 → 폴백
+        // G5: 세그먼트가 개행을 포함하면(따옴표 불균형으로 문단을 걸친 가짜 세그먼트)
+        //     전체 폴백 — 오늘 확정된 문단 삼킴 계열 사고를 구조적으로 차단.
+        if (/\n/.test(s.content) || /\n/.test(o.content)) return output;
+        if (s.content.length > 500 || o.content.length > 500) return output;
+        // 이미 병기 형태(… [한국어])인 경우 — 괄호 앞 공백 유무 무관하게 인정
+        const already = o.content.match(/^([\s\S]*?)\s*\[([^\]]*[가-힣][^\]]*)\]\s*$/);
+        if (already) {
+            const wellSpaced = /\s\[/.test(o.content);
+            if (canon(already[1]) === canon(s.content) && wellSpaced) continue; // STRICT_OK
+            // 🚨 beta.7: 영어 슬롯이 원문과 다름(모델이 쉼표→마침표 등 문장부호를
+            // 바꾼 표류). 복원을 포기하면 검증기가 exact 불일치로 폐기하므로,
+            // 영어 슬롯만 원문으로 교체해 결정론적으로 맞춘다.
+            const [op2, cl2] = delims[o.type] || ['"', '"'];
+            repairs.push({
+                index: o.index,
+                len: o.content.length + op2.length + cl2.length,
+                replacement: `${op2}${s.content} [${already[2].trim()}]${cl2}`
+            });
+            continue;
+        }
+        // 미번역(출력이 영어 원문 그대로) → 조립 대상 아님
+        if (canon(o.content) === canon(s.content)) continue;
+        const hasKorean = /[가-힣]/.test(o.content);
+        const looksLikeEnglishLeftover =
+            canon(s.content).length >= 15 && canon(o.content).includes(canon(s.content).slice(0, 15));
+        if (!hasKorean || looksLikeEnglishLeftover) return output; // G4: 애매 → 전체 폴백
+        // 부분 괄호가 있으면 그 한글만, 아니면 출력 전체를 한국어로 취급
+        const partial = o.content.match(/\[([^\]]*[가-힣][^\]]*)\]/);
+        const cleanKo = (partial ? partial[1] : o.content).replace(/^\[|\]$/g, '').trim();
+        const [opener, closer] = delims[o.type] || ['"', '"'];
+        repairs.push({
+            index: o.index,
+            len: o.content.length + opener.length + closer.length,
+            replacement: `${opener}${s.content} [${cleanKo}]${closer}`
+        });
+    }
+    if (repairs.length === 0) return output;
+    let result = output;
+    repairs.sort((a, b) => b.index - a.index); // 뒤에서부터 치환 → 앞 치환이 뒤 offset을 밀지 않음
+    for (const r of repairs) {
+        result = result.slice(0, r.index) + r.replacement + result.slice(r.index + r.len);
+    }
+    console.log(`[CAT] 🔧 병기 자동 조립: ${repairs.length}개 대사 원문 복원`);
+    return result;
 }
 
 function validateKoEnBilingualDialogue(original, output) {
