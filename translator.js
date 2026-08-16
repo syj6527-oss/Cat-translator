@@ -1551,7 +1551,37 @@ function validateKoEnBilingualDialogue(original, output) {
                 }
                 continue;
             }
-            if (canonizeForCompare(bilingual[1]) !== canonizeForCompare(sourceDialogue.content)) continue;
+            if (canonizeForCompare(bilingual[1]) !== canonizeForCompare(sourceDialogue.content)) {
+                // 🚨 v1.1.5 (L): 인접 대사 병합 허용 — "대사," 서술 "대사." 구조에서
+                // 모델이 한국어 어순상 대사를 하나의 인용구로 합치는 것은 더 자연스러운
+                // 번역이며(1.1.4 제보 로그 실측: "Prank," + "Sure, baby." → 한 인용구),
+                // 이를 붕괴로 오판해 완벽한 병기 전체를 폐기하던 사고 방지.
+                // 판정: 후보 영어부 = 원문 '연속' 대사 i..j를 '순서 그대로' 전부 결합.
+                // 이음새 문장부호 표류(,↔.)만 허용하는 전용 비교(flex)를 쓰며,
+                // 통삭제·순서 뒤집기·내용 창작은 결합 일치가 깨져 여전히 실패한다.
+                const flexForMerge = (value) => canonizeForCompare(value).replace(/[.,]/g, '');
+                const candidateFlex = flexForMerge(bilingual[1]);
+                if (candidateFlex.startsWith(flexForMerge(sourceDialogue.content))) {
+                    let accumulated = sourceDialogue.content;
+                    let mergeEnd = i;
+                    let mergeValid = true;
+                    while (candidateFlex !== flexForMerge(accumulated)) {
+                        mergeEnd++;
+                        if (mergeEnd >= sourceDialogues.length ||
+                            sourceDialogues[mergeEnd].type !== sourceDialogue.type) { mergeValid = false; break; }
+                        accumulated = accumulated + ' ' + sourceDialogues[mergeEnd].content;
+                        if (!candidateFlex.startsWith(flexForMerge(accumulated))) { mergeValid = false; break; }
+                    }
+                    if (mergeValid && candidateFlex === flexForMerge(accumulated)) {
+                        console.log(`[CAT] 🔗 인접 대사 병합 인정: 원문 대사 ${i + 1}~${mergeEnd + 1} → 출력 인용구 1개`);
+                        i = mergeEnd;
+                        matched = true;
+                        outputIndex++;
+                        break;
+                    }
+                }
+                continue;
+            }
             matched = true;
             outputIndex++;
             break;
