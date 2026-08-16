@@ -372,7 +372,8 @@ export function buildSystemInstruction(settings, options = {}) {
 
     if (targetLang === 'Korean') {
         activeRules.push(
-            'KOREAN LOCK: narration uses one consistent declarative -다 style unless an active style preset explicitly overrides it. Each character uses one stable 반말/존댓말 level inferred from context.'
+            'KOREAN LOCK: narration uses one consistent declarative -다 style unless an active style preset explicitly overrides it. Each character uses one stable 반말/존댓말 level inferred from context.',
+            'LOCALIZATION RESTRAINT: match the source register exactly. NEVER upgrade neutral source wording into Korean slang, memes, or internet abbreviations (e.g., "seat warmers" → "열선 시트/좌석 열선", never "엉따"). Use slang or abbreviations ONLY when the source itself is slang.'
         );
         activeRules.push(
             'Choose Korean kinship terms only when age, gender, and relationship support them; otherwise use a name or neutral term. Never map foreign accents to Korean regional dialects.'
@@ -458,6 +459,15 @@ export function buildTranslationCacheScope(stContext, contextMessages = []) {
 }
 
 export async function fetchTranslation(text, settings, stContext, options = {}) {
+    // 🚨 v1.1.6 (M-2): 문맥 화자 이름 목록 — 인풋 호격 추가 감지용.
+    // speaker가 "Baron, Archie, Lars"처럼 묶여 오는 경우 쉼표로 분해한다.
+    const _contextSpeakerNames = Array.from(new Set(
+        (options.contextMessages || [])
+            .map(m => (m && m.speaker) ? String(m.speaker) : '')
+            .flatMap(s => s.split(','))
+            .map(s => s.trim())
+            .filter(s => s.length >= 2)
+    ));
     const isVertexModel = settings.directModel && settings.directModel.startsWith('vertex-');
     const apiKey = settings.customKey || secret_state[SECRET_KEYS.MAKERSUITE];
     const vertexKey = settings.vertexKey || '';
@@ -529,7 +539,7 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
             const cachedCombined = cachedLiteral
                 ? `${cachedNatural}\n<<<CAT_LITERAL>>>\n${cachedLiteral}`
                 : cachedNatural;
-            const cachedValidation = validateTranslationPayload(cachedCombined, text, settings, targetLang);
+            const cachedValidation = validateTranslationPayload(cachedCombined, text, settings, targetLang, { contextSpeakers: _contextSpeakerNames });
             const cachedQuality = assessTranslationQuality(cachedCombined, text, settings, targetLang);
             const literalMissing = settings.literalBilingual === 'on' && !cachedLiteral;
             const cachedQualityInvalid = cachedQuality.score < 75 ||
@@ -1077,7 +1087,7 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
             }
         }
 
-        const validation = validateTranslationPayload(cleaned, text, settings, targetLang);
+        const validation = validateTranslationPayload(cleaned, text, settings, targetLang, { contextSpeakers: _contextSpeakerNames });
         if (!validation.ok) {
             return await retryRejectedTranslation(validation.reason, null, validation.detail, cleaned);
         }
@@ -1654,7 +1664,7 @@ function transformOutsideFencedBlocks(text, transform) {
     return result;
 }
 
-export function validateTranslationPayload(output, originalText, settings, targetLang) {
+export function validateTranslationPayload(output, originalText, settings, targetLang, options = {}) {
     if (!output || !output.trim()) {
         return { ok: false, reason: '번역 결과가 비어 있음' };
     }
@@ -1662,6 +1672,29 @@ export function validateTranslationPayload(output, originalText, settings, targe
     const split = splitLiteralAppendix(output);
     const natural = split.natural || '';
     const original = String(originalText || '');
+
+    // 🚨 v1.1.6 (M-2): 인풋 번역의 '문미 호격 추가' 감지 — 문맥에 페르소나/캐릭터
+    // 이름이 반복 등장하면 모델이 "…할 것 같아." → "…, 펠소."처럼 원문에 없는
+    // 호칭을 덧붙이는 문맥 유출이 실사용 제보됨. 인풋에는 창작 검증이 전무해
+    // 그대로 출고되던 구멍. 정당한 번역("남작"→"Baron")까지 막지 않도록
+    // '쉼표+이름으로 문장이 끝나는 호격 패턴'만 좁게 감지하고, 기존 재시도
+    // 기계에 이름을 명시한 사유로 넘긴다.
+    if (targetLang === 'English' && Array.isArray(options.contextSpeakers) && options.contextSpeakers.length > 0) {
+        const originalLower = original.toLowerCase();
+        for (const rawName of options.contextSpeakers) {
+            const name = String(rawName || '').trim();
+            if (name.length < 2) continue;
+            if (originalLower.includes(name.toLowerCase())) continue; // 원문에 이미 있으면 정당
+            const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const vocativeTail = new RegExp(`,\\s*${escaped}\\s*[.!?…"'\\u201d]*\\s*$`, 'im');
+            if (vocativeTail.test(natural)) {
+                return {
+                    ok: false,
+                    reason: `원문에 없는 이름이 번역 끝에 추가됨: ${name} — 원문 그대로만 번역할 것`,
+                };
+            }
+        }
+    }
     
     const sourceHasEvaluationText = /\b(?:Correct|Incorrect)\b|(?:->|→)|^(?:Source|Original|Input|Output|Translation|Analysis|Reasoning|Avoid|Required)\s*:/mi.test(original);
     if (!sourceHasEvaluationText) {
@@ -2257,6 +2290,15 @@ ${voiceReferences.join('\n')}`);
     }
     
     if (contextMessages.length > 0) {
+        // 🚨 v1.1.6 (M-1): 인풋(→English) 번역 전용 계약 — 문맥 유출 차단.
+        // 문맥에 페르소나 이름이 반복되면 모델이 호칭을 추가하거나 입력을 문맥에
+        // 맞춰 의역하는 문제가 제보됨. 문맥 섹션 바로 앞에 배치해 직접 통제한다.
+        if (isToEnglish) {
+            parts.push(`\n[INPUT TRANSLATION CONTRACT]
+This is the user's OWN line to send. Translate ONLY the given text, word-for-word faithful.
+NEVER add names, addressees, vocatives, or any word not present in the source.
+NEVER rephrase the input to "fit" the story context. Context below is for register and pronoun reference ONLY.`);
+        }
         parts.push('\n[Context - Previous messages for reference. Match each character\'s speech style consistently. Do NOT translate these:]');
         contextMessages.forEach((msg, i) => {
             const offset = contextMessages.length - i;
