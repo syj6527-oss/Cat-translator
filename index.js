@@ -2,7 +2,7 @@
 // 🐱 Translator v1.1.0
 // ============================================================
 import { extension_settings, getContext } from '../../../../scripts/extensions.js';
-import { catNotify, getThemeEmoji, getCompletionEmoji, setTextareaValue, getModelTheme, detectLanguageDirection, getCacheModelKey, buildLiteralDetailsHtml, stripLiteralDetails, analyzeLanguage, isClearlyLanguage, resolveInputTranslationDirection } from './utils.js';
+import { catNotify, getThemeEmoji, getCompletionEmoji, setTextareaValue, getModelTheme, detectLanguageDirection, getCacheModelKey, buildLiteralDetailsHtml, stripLiteralDetails, analyzeLanguage, isClearlyLanguage, resolveInputTranslationDirection, resolveInputUserPrompt } from './utils.js';
 import { initCache, deleteCached } from './cache.js';
 import { fetchTranslation, gatherContextMessages } from './translator.js';
 import { setupSettingsPanel, collectSettings, updateCacheStats, injectMessageButtons, injectInputButtons, setupDragDictionary, setupMutationObserver, showHistoryPopup, applyTheme, setSuppressAutoSave, clearPendingAutoSave, abortBulkTranslation, isTranslatedEditActive, markTranslatedEditSave, clearTranslatedEditSessions } from './ui.js';
@@ -10,15 +10,16 @@ import { setupSettingsPanel, collectSettings, updateCacheStats, injectMessageBut
 const EXT_NAME = "cat-translator";
 const stContext = getContext();
 
-const defaultSettings = { profile: '', customKey: '', vertexKey: '', vertexProject: '', vertexRegion: 'global', directModel: 'gemini-2.5-flash', customModelName: '', autoMode: 'none', bidirectional: 'off', dialogueBilingual: 'off', literalBilingual: 'off', iconVisibility: 'all', targetLang: 'Korean', style: 'normal', temperature: 0.3, maxTokens: 8192, contextRange: 1, userPrompt: '', dictionary: '', retranslateStrength: 'normal', afterEditMode: 'notify', previewTranslate: 'off', previewCleanup: 'off', promptPresets: {}, charPresetMap: {} };
-// 🚨 v1.1.2 정식 승격: 베타(cat-translator-beta) 설정을 최초 1회만 이관한다.
-// 이관 후에는 마커(_betaMigrated)로 재이관을 막아 두 설정이 독립적으로 유지된다.
-// 베타를 쓴 적 없는 사용자는 기존 정식 설정/기본값 그대로.
-if (extension_settings["cat-translator-beta"] && !extension_settings[EXT_NAME]?._betaMigrated) {
-    extension_settings[EXT_NAME] = JSON.parse(JSON.stringify(extension_settings["cat-translator-beta"]));
-    extension_settings[EXT_NAME]._betaMigrated = true;
-}
+const defaultSettings = { profile: '', customKey: '', vertexKey: '', vertexProject: '', vertexRegion: 'global', directModel: 'gemini-2.5-flash', customModelName: '', autoMode: 'none', bidirectional: 'off', dialogueBilingual: 'off', literalBilingual: 'off', iconVisibility: 'all', targetLang: 'Korean', style: 'normal', temperature: 0.3, maxTokens: 8192, contextRange: 1, userPrompt: '', dictionary: '', retranslateStrength: 'normal', afterEditMode: 'notify', previewTranslate: 'off', previewCleanup: 'off', cotMaskTags: '', inputUserPrompt: '', promptPresets: {}, charPresetMap: {} };
 let settings = Object.assign({}, defaultSettings, extension_settings[EXT_NAME]);
+// 🚨 v1.1.4-beta.5: 구글이 지원 종료한 모델이 저장돼 있으면 자동 이관.
+// gemini-2.0 계열은 2026-06-01 셧다운 완료 — 호출 시 무조건 실패하며,
+// 에러 본문이 안 보이던 구버전에선 "API 키 문제"로 오인되던 원인.
+const RETIRED_DIRECT_MODELS = { 'gemini-2.0-flash': 'gemini-3.5-flash', 'gemini-2.0-flash-001': 'gemini-3.5-flash', 'gemini-2.0-flash-lite': 'gemini-3.5-flash' };
+if (RETIRED_DIRECT_MODELS[settings.directModel]) {
+    console.log(`[CAT] ⚰️ 지원 종료 모델 감지: ${settings.directModel} → ${RETIRED_DIRECT_MODELS[settings.directModel]} 자동 이관`);
+    settings.directModel = RETIRED_DIRECT_MODELS[settings.directModel];
+}
 
 let _chatSaveTimer = null;
 const _translationApplyTokens = new Map();
@@ -534,7 +535,9 @@ async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTran
             ...settings,
             dialogueBilingual: 'off',
             literalBilingual: 'off',
-            targetLang: inputDirection.targetLang
+            targetLang: inputDirection.targetLang,
+            // 🚨 v1.1.4-beta.3: 인풋 번역은 전용 프롬프트 사용 (비어있으면 공용 폴백)
+            userPrompt: resolveInputUserPrompt(settings)
         };
     } else {
         const detected = detectLanguageDirection(textToTranslate, settings);
@@ -777,7 +780,10 @@ async function handleEditAreaTranslation(editArea, msgId, abortSignal, isInput =
         ...settings,
         dialogueBilingual: 'off',
         literalBilingual: 'off',
-        targetLang: direction.targetLang
+        targetLang: direction.targetLang,
+        // 🚨 v1.1.4-beta.3: 이 함수는 인풋/아웃풋 겸용 — 인풋일 때만 전용 프롬프트,
+        // 아웃풋 편집 번역은 기존 공용 userPrompt 그대로 (동작 불변)
+        userPrompt: isInput ? resolveInputUserPrompt(settings) : settings.userPrompt
     };
     const editRequestToken = `edit:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
     _translationApplyTokens.set(msgId, editRequestToken);
@@ -892,11 +898,53 @@ function revertMessage(id) {
 }
 function detectDir(text) { return detectLanguageDirection(text, settings); }
 
+async function findEnabledStableTranslator() {
+    try {
+        const extensionsModule = await import('../../../../scripts/extensions.js');
+        const extensionNames = Array.isArray(extensionsModule.extensionNames)
+            ? extensionsModule.extensionNames
+            : [];
+        const disabledExtensions = new Set(extension_settings.disabledExtensions || []);
+
+        for (const name of extensionNames) {
+            let manifest = typeof extensionsModule.getExtensionManifest === 'function'
+                ? extensionsModule.getExtensionManifest(name)
+                : null;
+            if (!manifest) {
+                try {
+                    const response = await fetch(`/scripts/extensions/${name}/manifest.json`, { cache: 'no-store' });
+                    if (response.ok) manifest = await response.json();
+                } catch (e) { /* 구버전 ST fallback 실패는 무시 */ }
+            }
+            if (manifest?.name !== 'cat-translator') continue;
+
+            const found = typeof extensionsModule.findExtension === 'function'
+                ? extensionsModule.findExtension(name)
+                : null;
+            const enabled = found ? found.enabled : !disabledExtensions.has(name);
+            if (enabled) {
+                return {
+                    name,
+                    displayName: manifest.display_name || name
+                };
+            }
+        }
+    } catch (e) {
+        console.warn('[CAT] 정식판 활성 상태 확인 실패:', e);
+    }
+
+    return $('#cat-trans-container').length > 0
+        ? { name: 'runtime', displayName: '기존 Translator' }
+        : null;
+}
+
 jQuery(async () => {
-    // 🚨 v1.1.2 정식 승격: 베타 시절의 "정식판 감지 → 자기 중단" 가드 제거.
-    // 이 확장이 이제 정식(cat-translator)이므로 가드를 유지하면 자기 자신을
-    // 감지해 로드가 중단된다. 정식+베타 동시 활성 시에는 베타 쪽 가드가
-    // 정식 manifest를 감지해 베타가 스스로 양보하므로 충돌 없음.
+    const stableTranslator = await findEnabledStableTranslator();
+    if (stableTranslator) {
+        console.error(`[CAT] ${stableTranslator.displayName} 활성 감지 → 중복 로드 중단`);
+        catNotify('🐱 다른 Cat Translator가 이미 켜져 있어 이 확장 로드를 중단했어요. 둘 중 하나만 활성화해주세요.', 'warning');
+        return;
+    }
 
     try { await initCache(); console.log('[CAT] 🐱 IndexedDB 캐시 초기화 완료'); } catch (e) { console.warn('[CAT] IndexedDB 초기화 실패, 메모리 캐시로 대체:', e); }
     setupSettingsPanel(settings, stContext, saveSettings); setupDragDictionary(settings, saveSettings); setupMutationObserver(processMessage, revertMessage, settings, stContext);

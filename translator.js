@@ -553,6 +553,8 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
 
     // 구조 토큰을 지키지 못하는 모델은 검증 실패 후 구버전 호환 경로로 한 번 재시도한다.
     const sourceText = text.trim();
+    // 🚨 v1.1.4-beta.2 (C): 설정의 사용자 추가 CoT 태그 목록을 수집기에 동기화
+    syncCotMaskTags(settings.cotMaskTags);
     const structureProtection = _structureFallback
         ? {
             text: sourceText,
@@ -660,8 +662,19 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
                 /구조 토큰 중복/.test(reason) ||
                 (growthMatch && parseInt(growthMatch[2], 10) > parseInt(growthMatch[1], 10))
             );
+            // 🚨 v1.1.4-beta.2 (F): 펜스·태그·매크로·코드행·들여쓰기 같은 임계 구조가
+            // 있으면 legacy 폴백(토큰 보호 해제) 금지. 1차에서 토큰을 못 지킨 모델에게
+            // 2차에 보호까지 벗겨 원본 구조를 맡기면 태그/펜스를 실제로 소실시켜
+            // "구조 요소 개수 불일치: 19→16" 계열 최종 실패가 되던 것이 실측 재현됨.
+            // 폴백 대신 보호 유지 재시도를 타면 reason에 누락 마커가 이미 명시돼
+            // ("구조 토큰 누락: @@CATFMT_0003@@") 모델이 정확한 교정 지시를 받는다.
+            // 검증 완화가 아니라 위험한 무보호 경로만 차단하는 수정.
+            const CRITICAL_TOKEN_TYPES = ['fence', 'inline', 'code-line', 'indent'];
+            const hasCriticalStructure = Array.isArray(structureProtection.tokens) &&
+                structureProtection.tokens.some(token => CRITICAL_TOKEN_TYPES.includes(token.type));
             let useStructureFallback = !inventedBeyondCutoff && !_structureFallback &&
                 structureProtection.hasStructure &&
+                !hasCriticalStructure &&
                 isStructureCompatibilityFailure(reason);
             const nextRetryReason = inventedBeyondCutoff
                 ? 'You added content beyond the cutoff of the truncated source (extra dividers/sections). The source ends mid-sentence by design. Translate only up to that exact cutoff and stop there. Ending abruptly is correct.'
@@ -912,20 +925,31 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
                 url = `https://generativelanguage.googleapis.com/v1beta/${model}:generateContent?key=${activeKey}`;
             }
             
-            const baseTemp = parseFloat(settings.temperature) || 0.3; const temperature = prevTranslation ? Math.min(baseTemp + 0.3, 1.0) : baseTemp; let maxTokens = parseInt(settings.maxTokens) || 8192;
-            // 🚨 직역 병기 ON = 출력이 자연번역+직역 2배 → 토큰 잘림 방지 증량
+            const baseTemp = parseFloat(settings.temperature) || 0.3; const temperature = prevTranslation ? Math.min(baseTemp + 0.3, 1.0) : baseTemp; let maxTokens = parseInt(settings.maxTokens) || 8192;            // 🚨 직역 병기 ON = 출력이 자연번역+직역 2배 → 토큰 잘림 방지 증량
             if (settings.literalBilingual === 'on') maxTokens = Math.min(maxTokens * 2, 32768);
             
             // 🚨 Gemini 3.x thinking 모델 대응: thinkingBudget 최소화
             // 3.5/3.0 Flash, 2.5 Pro는 reasoning 모델 → thinking이 토큰 다 먹어서 빈 응답 가능
             // 번역 작업은 패턴 매칭이라 thinking 거의 무의미 → 최소값(128)로 설정
             // (Pro 모델은 0 불가, 최소 128 필요 / Flash는 0 가능하지만 호환성 위해 128 통일)
-            const generationConfig = { temperature, maxOutputTokens: maxTokens };
+            // 🚨 v1.1.4-beta.4 (H): Gemini 3.x는 temperature/top_p/top_k를 거부하고
+            // thinkingBudget 대신 thinkingLevel(문자열)을 요구함 (구글 공식 마이그레이션).
+            // 기존 코드는 temperature+thinkingBudget을 항상 실어 3.6/3.7 직결 호출이
+            // 400 검증 에러로 전멸 → "API 키 문제"로 오인되던 근본 원인.
+            // 2.x 요청 본문은 기존과 완전히 동일하게 유지 (기존 사용자 무영향).
             const modelLower = (actualModel || '').toLowerCase();
-            const isThinkingModel = /gemini-3|gemini-2\.5-pro/i.test(modelLower);
-            if (isThinkingModel) {
-                generationConfig.thinkingConfig = { thinkingBudget: 128 };
-                console.log(`[CAT] 🤔 thinking 모델 감지 (${actualModel}) → thinkingBudget=128 (번역엔 thinking 불필요)`);
+            const isGemini3Family = /gemini-3/i.test(modelLower);
+            let generationConfig;
+            if (isGemini3Family) {
+                // 3.7은 MINIMAL 미지원 → 최소 사고 수준인 'low' 사용 (번역엔 깊은 사고 불필요)
+                generationConfig = { maxOutputTokens: maxTokens, thinkingConfig: { thinkingLevel: 'low' } };
+                console.log(`[CAT] 🧬 Gemini 3.x 감지 (${actualModel}) → temperature 제외, thinkingLevel=low`);
+            } else {
+                generationConfig = { temperature, maxOutputTokens: maxTokens };
+                if (/gemini-2\.5-pro/i.test(modelLower)) {
+                    generationConfig.thinkingConfig = { thinkingBudget: 128 };
+                    console.log(`[CAT] 🤔 thinking 모델 감지 (${actualModel}) → thinkingBudget=128 (번역엔 thinking 불필요)`);
+                }
             }
             
             const fetchBody = { systemInstruction: { parts: [{ text: activeSystemInstruction }] }, contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig, safetySettings: SAFETY_SETTINGS };
@@ -1311,12 +1335,69 @@ function postProcessBilingualText(text, bilingualMode) {
     });
 }
 
+// 🚨 v1.1.4-beta.2 (C): CoT 컨테이너 태그 기본 목록.
+// 화면 숨김 정규식(promptOnly/markdownOnly)은 msg.mes 원본을 안 바꾸므로,
+// 프리셋이 심은 CoT 블록이 번역기에는 그대로 보인다. 그 안의 "대사 초안" 인용문을
+// 수집기가 병기 대상 대사로 오인 → 검증 실패·조립 게이트 차단·강등의 근본 원인.
+// 태그 '마크업'만 지우던 기존 방식과 달리 이 목록의 태그는 '내용까지' 통째로 마스킹한다.
+// REVISION_CHECK·Facts는 실사용 제보 프리셋에서 실물 확보된 태그명.
+// 새 프리셋에서 다른 태그명이 발견되면 설정 cotMaskTags(쉼표 구분)로 추가 가능.
+const DEFAULT_COT_MASK_TAGS = ['thinking', 'think', 'thought', 'reasoning', 'cot', 'analysis', 'REVISION_CHECK', 'Facts'];
+let _extraCotMaskTags = [];
+
+// fetchTranslation 진입 시 settings.cotMaskTags(쉼표 구분 문자열)를 동기화한다.
+// 태그명은 영숫자·_·- 만 허용해 정규식 인젝션을 차단한다.
+export function syncCotMaskTags(rawList) {
+    _extraCotMaskTags = String(rawList || '')
+        .split(',')
+        .map(tag => tag.trim().replace(/[^A-Za-z0-9_-]/g, ''))
+        .filter(tag => tag.length > 0);
+}
+
+function getActiveCotMaskTags() {
+    return _extraCotMaskTags.length ? DEFAULT_COT_MASK_TAGS.concat(_extraCotMaskTags) : DEFAULT_COT_MASK_TAGS;
+}
+
+// 🚨 v1.1.4-beta.4 (G): 서술 속 '인용 강조'(scare quote) 판별 — 병기 필수 대상에서 면제.
+// 예: The "lovers" comment landed... 처럼 서술이 단어를 따옴표로 강조하는 경우.
+// 근거: 진짜 대사는 거의 항상 문장부호를 동반("Wait." "Slowly," "Your parents,")하고,
+// 인용 강조는 문장부호 없는 맨단어("lovers")다. 좋은 모델일수록 이를 '연인'처럼
+// 자연스러운 한국어 인용으로 번역해 겹따옴표 짝이 사라지고, 그 오탐 하나가
+// 완벽한 병기 대사 전체를 폐기시키는 사고가 실측 재현됨(3.7 Flash 제보 로그).
+// 검증기와 자동 조립기의 개수 게이트 양쪽이 동일하게 이 술어를 공유해야 한다.
+function isBareWordScareQuote(content) {
+    return /^[A-Za-z'\u2019-]{1,30}$/.test(String(content || '').trim());
+}
+
 function collectQuotedSegmentsOutsideFences(text) {
     const source = String(text || '');
-    const masked = source
-        // 🚨 beta.7: 마스킹 시 개행은 보존 — 공백으로만 바꾸면 펜스/태그를 관통해
-        // 한 줄처럼 이어지는 가짜 인용구가 생길 수 있음
-        .replace(/```[^\n]*\n[\s\S]*?```/g, match => match.replace(/[^\n]/g, ' '))
+    // 🚨 beta.7: 마스킹 시 개행은 보존 — 공백으로만 바꾸면 펜스/태그를 관통해
+    // 한 줄처럼 이어지는 가짜 인용구가 생길 수 있음 (아래 모든 마스킹 공통 원칙)
+    const blankKeepNewlines = segment => segment.replace(/[^\n]/g, ' ');
+    // 🚨 v1.1.4-beta.2 (D): HTML 주석은 '내용까지' 마스킹 — <!-- 는 기존 태그
+    // 마스킹 정규식(< + 영문자)에 안 걸려 주석 속 인용문이 대사로 수집되던 구멍.
+    let masked = source.replace(/<!--[\s\S]*?-->/g, blankKeepNewlines);
+    // (C): CoT 컨테이너는 여닫는 태그 사이 내용 전체를 마스킹.
+    // 펜스보다 먼저 실행 — CoT 안에 깨진 펜스 조각이 있어도 바깥을 오염 못 하게.
+    for (const tag of getActiveCotMaskTags()) {
+        masked = masked.replace(
+            new RegExp(`<\\s*${tag}\\b[^>]*>[\\s\\S]*?<\\s*\\/\\s*${tag}\\s*>`, 'gi'),
+            blankKeepNewlines
+        );
+    }
+    masked = masked
+        .replace(/```[^\n]*\n[\s\S]*?```/g, blankKeepNewlines)
+        // 🚨 v1.1.4-beta.2 (B): 한 줄 인라인 펜스(```…```)는 위의 짝 마스킹이
+        // 개행(\n)을 요구해 통과되던 구멍 — 별도 마스킹.
+        .replace(/```[^`\n]+```/g, blankKeepNewlines);
+    // 🚨 v1.1.4-beta.2 (A): 짝·인라인 마스킹 후에도 남은 여는 펜스(홀수 개)는
+    // 마크다운 표준처럼 "거기부터 끝까지 코드"로 간주해 마스킹.
+    // 미닫힘 상태창·절단된 출력에서 펜스 안 따옴표("tense" 등)가 대사로 오인되던 구멍.
+    const loneFenceIndex = masked.indexOf('```');
+    if (loneFenceIndex !== -1) {
+        masked = masked.slice(0, loneFenceIndex) + blankKeepNewlines(masked.slice(loneFenceIndex));
+    }
+    masked = masked
         .replace(/<\/?[a-zA-Z][^>]*>/g, match => match.replace(/[^\n]/g, ' '))
         // 🚨 beta.3: 작가 오타(“…")·모델 정규화("…”)로 커리/스트레이트가 섞이면
         // 짝맞추기가 통째로 밀리므로 수집 단계에서 통일 (1:1 치환이라 index 불변)
@@ -1366,7 +1447,10 @@ function collectQuotedSegmentsOutsideFences(text) {
 //   G4. 출력이 미번역(영어 그대로)이 아니고, 한글이 존재
 // 개행 안전: 전역 재탐색 없이 수집된 offset 기준으로 뒤에서부터 치환한다.
 function repairBilingualByAlignment(original, output) {
-    const src = collectQuotedSegmentsOutsideFences(original).filter(s => /[A-Za-z]/.test(s.content));
+    // 🚨 v1.1.4-beta.4 (G): 검증기와 동일하게 인용 강조를 개수 게이트에서 면제 —
+    // "lovers" 같은 오탐 1개가 1:1 게이트를 막아 조립 전체를 무산시키던 사고 방지
+    const src = collectQuotedSegmentsOutsideFences(original)
+        .filter(s => /[A-Za-z]/.test(s.content) && !isBareWordScareQuote(s.content));
     const out = collectQuotedSegmentsOutsideFences(output);
     if (src.length === 0) return output;                 // G1
     if (src.length !== out.length) return output;        // G2
@@ -1432,6 +1516,8 @@ function validateKoEnBilingualDialogue(original, output) {
     const sourceDialogues = collectQuotedSegmentsOutsideFences(original)
         .filter(item =>
             /[A-Za-z]/.test(item.content) &&
+            // 🚨 v1.1.4-beta.4 (G): 문장부호 없는 맨단어 인용 강조는 병기 필수에서 면제
+            !isBareWordScareQuote(item.content) &&
             !/\[[^\]]*[가-힣][^\]]*\]\s*$/.test(item.content)
         );
     if (sourceDialogues.length === 0) return { ok: true, reason: null };
@@ -1701,8 +1787,28 @@ export function assessTranslationQuality(output, originalText, settings, targetL
         const sourceTerm = (targetLang === 'English' ? right : left).trim();
         const outputTerm = (targetLang === 'English' ? left : right).trim();
         if (!sourceTerm || !outputTerm) continue;
+        // 🚨 v1.1.4-beta.6 (K-2): 부분 문자열 오탐 봉합 — 기존 includes()는
+        // 모델이 "아이린"으로 잘못 써도 그 안에 "이린"이 포함돼 누락 감지를 통과시켰음
+        // → 재시도가 안 걸려 변형 표기가 그대로 출고 ("사전 이름 불안정"의 원인).
+        // 한글 표기는 앞글자가 한글이 아닌 경우만 유효 출현으로 인정:
+        // "이린아"(조사)는 유효 ✓ / "아이린"(접두 변형)은 무효 ✗ — 한국어 이름은
+        // 뒤에 조사가 붙지 앞에 음절이 붙지 않는다는 성질 이용.
+        const outputTermLower = outputTerm.toLocaleLowerCase();
+        const naturalLower = natural.toLocaleLowerCase();
+        let outputTermFound;
+        if (/[가-힣]/.test(outputTerm)) {
+            outputTermFound = false;
+            let idx = naturalLower.indexOf(outputTermLower);
+            while (idx !== -1) {
+                const prevChar = idx > 0 ? naturalLower[idx - 1] : '';
+                if (!/[가-힣]/.test(prevChar)) { outputTermFound = true; break; }
+                idx = naturalLower.indexOf(outputTermLower, idx + 1);
+            }
+        } else {
+            outputTermFound = naturalLower.includes(outputTermLower);
+        }
         if (source.toLocaleLowerCase().includes(sourceTerm.toLocaleLowerCase()) &&
-            !natural.toLocaleLowerCase().includes(outputTerm.toLocaleLowerCase())) {
+            !outputTermFound) {
             missingGlossary.push(outputTerm);
         }
     }
@@ -2057,12 +2163,21 @@ Just plain, fully-translated text.
     
     if (settings.dictionary && settings.dictionary.trim()) {
         // 🚨 본문에 실제 존재하는 사전 항목만 필터링 (AI가 무관한 항목을 오적용하는 것 방지)
+        // 🚨 v1.1.4-beta.6 (K-1): 방향 인지 — 입력 번역(→English)일 땐 우변(한국어)이
+        // 원문에 있는지로 매칭하고, SOURCE=TARGET 의미가 유지되도록 항목을 뒤집어 제시.
+        // 기존엔 항상 좌변만 검사해 입력 번역에서 사전 프롬프트가 누락됐음.
+        const toEnglish = targetLang === 'English';
         const textLower = String(sourceText || text).toLowerCase();
-        const matchedLines = settings.dictionary.split('\n').filter(l => {
-            if (!l.includes('=')) return false;
-            const orig = l.split('=')[0].trim();
-            return orig && textLower.includes(orig.toLowerCase());
-        });
+        const matchedLines = settings.dictionary.split('\n').map(l => {
+            if (!l.includes('=')) return null;
+            const [left, ...rightParts] = l.split('=');
+            const right = rightParts.join('=').trim();
+            const leftTrim = left.trim();
+            if (!leftTrim || !right) return null;
+            const sourceSide = toEnglish ? right : leftTrim;
+            if (!textLower.includes(sourceSide.toLowerCase())) return null;
+            return toEnglish ? `${right}=${leftTrim}` : `${leftTrim}=${right}`;
+        }).filter(Boolean);
         if (matchedLines.length > 0) {
             const targetLangName = targetLang || 'the target language';
             parts.push(`
@@ -2249,7 +2364,16 @@ async function fetchWithRetry(url, body, retries = 5, abortSignal = null, extraH
             }
             
             if (!res.ok) {
-                throw new Error(API_ERROR_MESSAGES[res.status] || `❌ 알 수 없는 오류 (${res.status})`);
+                // 🚨 v1.1.4-beta.4 (I): 구글의 실제 에러 사유를 문구에 덧붙임.
+                // 구글은 잘못된 API 키도 401이 아닌 400으로 주기 때문에, 본문을 버리면
+                // '키 오류'와 '파라미터 오류'가 같은 문구로 뭉개져 오진을 유발했음.
+                let apiDetail = '';
+                try {
+                    const errJson = await res.json();
+                    const apiMsg = errJson?.error?.message;
+                    if (apiMsg) apiDetail = `\n↳ ${String(apiMsg).slice(0, 160)}`;
+                } catch (_) { /* 본문이 JSON이 아니면 기존 문구만 사용 */ }
+                throw new Error((API_ERROR_MESSAGES[res.status] || `❌ 알 수 없는 오류 (${res.status})`) + apiDetail);
             }
             
             return await res.json();
