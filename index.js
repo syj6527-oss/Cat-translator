@@ -898,54 +898,11 @@ function revertMessage(id) {
 }
 function detectDir(text) { return detectLanguageDirection(text, settings); }
 
-async function findEnabledStableTranslator() {
-    try {
-        const extensionsModule = await import('../../../../scripts/extensions.js');
-        const extensionNames = Array.isArray(extensionsModule.extensionNames)
-            ? extensionsModule.extensionNames
-            : [];
-        const disabledExtensions = new Set(extension_settings.disabledExtensions || []);
-
-        for (const name of extensionNames) {
-            let manifest = typeof extensionsModule.getExtensionManifest === 'function'
-                ? extensionsModule.getExtensionManifest(name)
-                : null;
-            if (!manifest) {
-                try {
-                    const response = await fetch(`/scripts/extensions/${name}/manifest.json`, { cache: 'no-store' });
-                    if (response.ok) manifest = await response.json();
-                } catch (e) { /* 구버전 ST fallback 실패는 무시 */ }
-            }
-            if (manifest?.name !== 'cat-translator') continue;
-
-            const found = typeof extensionsModule.findExtension === 'function'
-                ? extensionsModule.findExtension(name)
-                : null;
-            const enabled = found ? found.enabled : !disabledExtensions.has(name);
-            if (enabled) {
-                return {
-                    name,
-                    displayName: manifest.display_name || name
-                };
-            }
-        }
-    } catch (e) {
-        console.warn('[CAT] 정식판 활성 상태 확인 실패:', e);
-    }
-
-    return $('#cat-trans-container').length > 0
-        ? { name: 'runtime', displayName: '기존 Translator' }
-        : null;
-}
-
 jQuery(async () => {
-    const stableTranslator = await findEnabledStableTranslator();
-    if (stableTranslator) {
-        console.error(`[CAT] ${stableTranslator.displayName} 활성 감지 → 중복 로드 중단`);
-        catNotify('🐱 다른 Cat Translator가 이미 켜져 있어 이 확장 로드를 중단했어요. 둘 중 하나만 활성화해주세요.', 'warning');
-        return;
-    }
-
+    // 🚨 v1.1.4 핫픽스: 베타에서 물려받은 공존 가드 제거.
+    // 가드는 "정식판(cat-translator)이 켜져 있으면 양보"하는 베타 전용 장치인데,
+    // 정식판 자신의 manifest.name이 cat-translator라서 자기 자신을 감지해
+    // 로드를 중단하는 자기참조 버그가 발생했음. 양보 책임은 베타 쪽 가드가 담당한다.
     try { await initCache(); console.log('[CAT] 🐱 IndexedDB 캐시 초기화 완료'); } catch (e) { console.warn('[CAT] IndexedDB 초기화 실패, 메모리 캐시로 대체:', e); }
     setupSettingsPanel(settings, stContext, saveSettings); setupDragDictionary(settings, saveSettings); setupMutationObserver(processMessage, revertMessage, settings, stContext);
     // 🚨 첫 마이그레이션 / baseline 리셋 안내
