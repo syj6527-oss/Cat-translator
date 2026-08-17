@@ -459,7 +459,7 @@ export function buildTranslationCacheScope(stContext, contextMessages = []) {
 }
 
 export async function fetchTranslation(text, settings, stContext, options = {}) {
-    // 🚨 v1.1.6 (M-2): 문맥 화자 이름 목록 — 인풋 호격 추가 감지용.
+    // 🚨 v1.1.7 (M-2b): 문맥 화자 이름 목록 — 문미 호격 '관측' 스탬프용.
     // speaker가 "Baron, Archie, Lars"처럼 묶여 오는 경우 쉼표로 분해한다.
     const _contextSpeakerNames = Array.from(new Set(
         (options.contextMessages || [])
@@ -1673,25 +1673,27 @@ export function validateTranslationPayload(output, originalText, settings, targe
     const natural = split.natural || '';
     const original = String(originalText || '');
 
-    // 🚨 v1.1.6 (M-2): 인풋 번역의 '문미 호격 추가' 감지 — 문맥에 페르소나/캐릭터
-    // 이름이 반복 등장하면 모델이 "…할 것 같아." → "…, 펠소."처럼 원문에 없는
-    // 호칭을 덧붙이는 문맥 유출이 실사용 제보됨. 인풋에는 창작 검증이 전무해
-    // 그대로 출고되던 구멍. 정당한 번역("남작"→"Baron")까지 막지 않도록
-    // '쉼표+이름으로 문장이 끝나는 호격 패턴'만 좁게 감지하고, 기존 재시도
-    // 기계에 이름을 명시한 사유로 넘긴다.
+    // 🚨 v1.1.7 (M-2b): '문미 호격 추가' 감지를 차단에서 **경고**로 강등.
+    // v1.1.6의 차단 방식은 정당한 번역까지 죽이는 오탐이 실측됨 — 인풋 번역은
+    // 한글 원문("아치")→영문 출력("Archie")으로 이름 표기가 바뀌는 게 정상이라,
+    // "원문에 이름이 있는지"를 표기 그대로 비교하는 방식으론 판정이 원리적으로
+    // 불가능하다 (v1.1.6 제보 로그: "…아치 너보다…" → "…than you, Archie." 차단).
+    // 강등 후: 번역은 정상 출고하고, 디버그 로그·콘솔에만 의심 스탬프를 남겨
+    // 진짜 이름 추가(펠소 계열)가 재발하는지 데이터로 관측한다.
+    // 실제 차단 방어는 프롬프트 계약(M-1)이 담당한다.
+    let vocativeSoftNote = null;
     if (targetLang === 'English' && Array.isArray(options.contextSpeakers) && options.contextSpeakers.length > 0) {
         const originalLower = original.toLowerCase();
         for (const rawName of options.contextSpeakers) {
             const name = String(rawName || '').trim();
             if (name.length < 2) continue;
-            if (originalLower.includes(name.toLowerCase())) continue; // 원문에 이미 있으면 정당
+            if (originalLower.includes(name.toLowerCase())) continue;
             const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             const vocativeTail = new RegExp(`,\\s*${escaped}\\s*[.!?…"'\\u201d]*\\s*$`, 'im');
             if (vocativeTail.test(natural)) {
-                return {
-                    ok: false,
-                    reason: `원문에 없는 이름이 번역 끝에 추가됨: ${name} — 원문 그대로만 번역할 것`,
-                };
+                vocativeSoftNote = `⚠️ 문미 호격 의심 (관측용, 차단 아님): "${name}" — 원문 한글 표기와 대조 필요`;
+                console.warn(`[CAT] ${vocativeSoftNote}`);
+                break;
             }
         }
     }
@@ -1766,7 +1768,7 @@ export function validateTranslationPayload(output, originalText, settings, targe
         };
     }
     
-    return { ok: true, reason: null, softNote: dividerSoftNote };
+    return { ok: true, reason: null, softNote: [dividerSoftNote, vocativeSoftNote].filter(Boolean).join(' / ') || null };
 }
 
 export function assessTranslationQuality(output, originalText, settings, targetLang) {
