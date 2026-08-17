@@ -79,7 +79,7 @@ export function catNotifyProgress(message, onAbort) {
 }
 
 // 🚨 정밀 클리너: AI가 추가한 래핑만 제거, 원본 코드블록/YAML 보존!
-export const CAT_BETA_VERSION = '1.1.7';
+export const CAT_BETA_VERSION = '1.1.8';
 
 export function cleanResult(text, originalText = null, structureProtection = null) {
     if (!text) return "";
