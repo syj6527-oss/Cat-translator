@@ -1698,10 +1698,16 @@ export function validateTranslationPayload(output, originalText, settings, targe
         }
     }
     
-    const sourceHasEvaluationText = /\b(?:Correct|Incorrect)\b|(?:->|→)|^(?:Source|Original|Input|Output|Translation|Analysis|Reasoning|Avoid|Required)\s*:/mi.test(original);
+    // 🚨 v1.1.9 (O): 게이트 대칭화 — 카운터가 세는 4단어(Avoid·Required 포함)를
+    // 게이트도 전부 인정. 기존엔 Correct|Incorrect만 게이트에 있어서, 병기 모드가
+    // 보존한 평범한 영어 대사("avoid the docks", "required past nine")가
+    // '모델 검증 과정 노출'로 오판돼 전체 원문 유지되는 사고가 실측 재현됨.
+    const sourceHasEvaluationText = /\b(?:Correct|Incorrect|Avoid|Required)\b|(?:->|→)|^(?:Source|Original|Input|Output|Translation|Analysis|Reasoning|Avoid|Required)\s*:/mi.test(original);
     if (!sourceHasEvaluationText) {
         const arrowCount = (natural.match(/(?:->|→)/g) || []).length;
-        const gradingCount = (natural.match(/\b(?:Correct|Incorrect|Avoid|Required)(?:\s+(?:output|payload|structure|format))?[.:]?/gi) || []).length;
+        // 🚨 v1.1.9 (O): 닫는 경계(\b) 추가 — correcting/avoiding/correctly 같은
+        // 접미 파생어가 채점어로 카운트되던 구멍 봉합.
+        const gradingCount = (natural.match(/\b(?:Correct|Incorrect|Avoid|Required)\b(?:\s+(?:output|payload|structure|format))?[.:]?/gi) || []).length;
         const labelCount = (natural.match(/^(?:Source|Original|Input|Output|Translation|Correct|Analysis|Reasoning|Avoid|Required)\s*:/gmi) || []).length;
         if ((arrowCount >= 2 && gradingCount >= 1) || gradingCount >= 2 || labelCount >= 2) {
             return { ok: false, reason: '모델의 검증 과정이 번역문에 노출됨' };
@@ -1713,7 +1719,12 @@ export function validateTranslationPayload(output, originalText, settings, targe
         return { ok: false, reason: '프롬프트 지시문이 번역문에 노출됨' };
     }
     
-    if (settings.literalBilingual !== 'on' && (split.literal || /^»\s+/m.test(natural))) {
+    // 🚨 v1.1.10 (P): » 검사에 원문 게이트 추가 — 원문이 길메 인용(» ...)을
+    // 정당하게 쓰는 카드에서, 번역이 이를 보존하면 매번 '직역 형식 섞임'으로
+    // 하드 거부되던 O형 비대칭 봉합. 내부 마커(<<<CAT_LITERAL>>>)는 원문에
+    // 존재할 수 없으므로 기존대로 무게이트 유지.
+    if (settings.literalBilingual !== 'on' &&
+        (split.literal || (!/^»\s+/m.test(original) && /^»\s+/m.test(natural)))) {
         return { ok: false, reason: '일반 번역에 직역 형식이 섞임' };
     }
     
