@@ -1048,6 +1048,10 @@ jQuery(async () => {
         
         // 영어가 실제로 수정되었는지 확인
         if (newOriginal === msg.extra.original_mes) return;
+        // 🚨 v1.1.11 (Q): 진행 중 번역 양보 — 폴러(3초 백업)가 이후 재시도하므로
+        // 여기서 소비하지 않고 물러난다 (진행 중 번역 중단 방지).
+        const inflightEdit = _activeTranslationAborts.get(parseInt(id, 10));
+        if (inflightEdit && !inflightEdit.signal.aborted) return;
         
         console.log(`[CAT] ✏️ 원문 갱신 #${id}: "${msg.extra.original_mes.substring(0,30)}..." → "${newOriginal.substring(0,30)}..."`);
         
@@ -1071,7 +1075,7 @@ jQuery(async () => {
             deleteCached(msg.mes, targetLang, modelKey);
             setTimeout(() => {
                 if (getLiveChat() !== expectedChatRef) return;
-                processMessage(id, false, null, false, false);
+                processMessage(id, false, null, false, true);
             }, 300);
         }
     }
@@ -1272,6 +1276,12 @@ jQuery(async () => {
             // 이미 처리한 메시지는 스킵
             const fingerprint = msg.mes.substring(0, 100);
             if (_editPollProcessed.get(idx) === fingerprint) return;
+            // 🚨 v1.1.11 (Q): 진행 중 번역이 있으면 이번 사이클은 양보 — 지문/원문을
+            // 소비하지 않고 물러나 3초 뒤 재시도. 기존엔 isAutoEvent=false로
+            // processMessage를 불러 N 게이트에 '수동'으로 위장 진입했고, 초대형
+            // 메시지의 진행 중 번역을 중단시키는 루프가 v1.1.10에서도 남아 있었음.
+            const inflightPoll = _activeTranslationAborts.get(idx);
+            if (inflightPoll && !inflightPoll.signal.aborted) return;
             _editPollProcessed.set(idx, fingerprint);
             
             console.log(`[CAT] 🔍 폴링 감지: 원문 수정 #${idx} (mode: ${mode})`);
@@ -1295,7 +1305,7 @@ jQuery(async () => {
                 deleteCached(msg.mes, targetLang, modelKey);
                 setTimeout(() => {
                     if (getLiveChat() !== pollChatRef) return;
-                    processMessage(idx, false, null, false, false);
+                    processMessage(idx, false, null, false, true);
                 }, 300);
             } else if (mode === 'notify') {
                 stContext.updateMessageBlock(idx, msg);
