@@ -977,8 +977,41 @@ function showDebugPopup() {
             ? log.attempts.map((a, i) => `${i + 1}차 [${a.time}] (${a.path}) ${a.reason}${a.detail ? '\n    ' + String(a.detail).replace(/\n/g, '\n    ') : ''}`).join('\n')
             : null;
         const copyText = `[🐱 Cat Translator 디버그 로그]\n버전: ${CAT_BETA_VERSION}\n시각: ${ts}\n모드: ${mode}\n모델: ${model}\n에러: ${error}\n복구: ${recovery}${log?.validationDetail ? '\n\n--- 검증 상세 ---\n' + log.validationDetail : ''}${attemptLines ? '\n\n--- 시도 이력 ---\n' + attemptLines : ''}\n\n--- 프롬프트 ---\n${log?.prompt || '없음'}\n\n--- LLM 응답 ---\n${log?.rawResponse || '없음'}\n\n--- 후처리 결과 ---\n${log?.cleaned || '없음'}${thought ? '\n\n--- 사고 과정 ---\n' + thought : ''}`;
-        navigator.clipboard.writeText(copyText).then(() => catNotify('📋 디버그 로그 복사 완료!', 'success')).catch(() => catNotify('복사 실패 — 수동으로 복사해주세요', 'warning'));
+        catCopyToClipboard(copyText).then(ok => ok
+            ? catNotify('📋 디버그 로그 복사 완료!', 'success')
+            : catNotify('복사 실패 — 로그 창의 텍스트를 길게 눌러 수동 복사해주세요', 'warning'));
     });
+}
+
+// 🚨 v1.1.13 (S): 비보안 컨텍스트(HTTP LAN 접속) 대응 클립보드 헬퍼.
+// navigator.clipboard는 HTTPS/localhost에서만 존재 — 폰에서 http://192.168.x.x로
+// 접속하면 undefined라 기존 단독 호출이 알림도 없이 즉사했음 ("로그복사도 안 됨"
+// 제보의 원인). 모바일 http 사용자들이 로그를 '안' 보낸 게 아니라 '못' 보냈던 것.
+// 1차: 표준 API → 실패/부재 시 2차: 임시 textarea + execCommand 폴백.
+async function catCopyToClipboard(text) {
+    try {
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+    } catch (_) { /* 폴백으로 진행 */ }
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        ta.style.top = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ta.setSelectionRange(0, ta.value.length); // iOS 대응
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+    } catch (_) {
+        return false;
+    }
 }
 
 function showBulkPopup(event, settings, stContext, processMessageFn) {
