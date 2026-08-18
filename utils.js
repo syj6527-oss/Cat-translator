@@ -79,7 +79,7 @@ export function catNotifyProgress(message, onAbort) {
 }
 
 // 🚨 정밀 클리너: AI가 추가한 래핑만 제거, 원본 코드블록/YAML 보존!
-export const CAT_BETA_VERSION = '1.1.11';
+export const CAT_BETA_VERSION = '1.1.12';
 
 export function cleanResult(text, originalText = null, structureProtection = null) {
     if (!text) return "";
@@ -586,6 +586,37 @@ export function restoreTranslationStructure(text, protection, options = {}) {
         console.log('[CAT] 🔧 모델별 구조 토큰 표기 차이 자동 복구');
     }
     let previousIndex = -1;
+    // 🚨 v1.1.12 (R): 문단 내 inline 토큰(매크로류) 어순 재배열 허용 판정.
+    // 한국어 통사론상 종속절("~할 때까지", "~하려고")은 본동사 앞으로 와야 해서,
+    // "until {{d}} fixes it" 류 문장은 원문 토큰 순서로는 한국어가 성립 불가 —
+    // 자연스러운 번역일수록 '구조 토큰 순서 변경'으로 거부되던 사고가 실측 로그로
+    // 확인됨(1.1.11, 0002↔0003 / 0018↔0019 이중 스왑, 재시도 결정론 실패).
+    // 허용 조건(전부 충족 시에만): ① 모든 마커가 정확히 1회씩 존재
+    // ② 원문/출력의 문단(빈 줄 경계) 수가 동일 ③ 각 문단의 마커 '집합'이 동일
+    //   (= 문단 경계를 넘는 이동 없음 — 진짜 사고인 블록 밀림은 계속 차단)
+    // ④ inline 외 타입(펜스·코드행·들여쓰기·통행) 토큰의 상대 순서는 불변.
+    const reorderExemption = (() => {
+        const markersIn = txt => (String(txt).match(/@@CATFMT_\d{4}@@/g) || []);
+        const allOnce = protection.expectedMarkers.every(m =>
+            validationOutput.split(m).length - 1 === 1);
+        if (!allOnce) return false;
+        const srcParas = protection.text.split(/\n[ \t]*\n/);
+        const outParas = validationOutput.split(/\n[ \t]*\n/);
+        if (srcParas.length !== outParas.length) return false;
+        for (let i = 0; i < srcParas.length; i++) {
+            const a = markersIn(srcParas[i]).slice().sort().join('|');
+            const b = markersIn(outParas[i]).slice().sort().join('|');
+            if (a !== b) return false;
+        }
+        const nonInline = new Set(protection.tokens
+            .filter(t => t.type !== 'inline').map(t => t.marker));
+        const seq = txt => markersIn(txt).filter(m => nonInline.has(m)).join('|');
+        if (seq(protection.text) !== seq(validationOutput)) return false;
+        return true;
+    })();
+    // 사면은 '실제 위반을 면제한 경우'에만 발효 — 정상 출력에서 구간 검사(beta.9)가
+    // 광역으로 꺼지는 것을 방지 (reorderExemption은 '가능 여부', reorderExcused는 '발동 여부')
+    let reorderExcused = false;
     for (const marker of protection.expectedMarkers) {
         const firstIndex = validationOutput.indexOf(marker);
         if (firstIndex < 0) {
@@ -602,7 +633,10 @@ export function restoreTranslationStructure(text, protection, options = {}) {
                 detail: `1번째 등장:\n${snippetAround(validationOutput, firstIndex, marker.length)}\n\n2번째 등장:\n${snippetAround(validationOutput, secondIndex, marker.length)}`
             };
         }
-        if (firstIndex <= previousIndex) {
+        if (firstIndex <= previousIndex && reorderExemption) {
+            if (!reorderExcused) console.log('[CAT] 🔀 문단 내 inline 토큰 어순 재배열 허용 (한국어 통사 재배치)');
+            reorderExcused = true;
+        } else if (firstIndex <= previousIndex) {
             return {
                 ok: false, text: null, reason: `구조 토큰 순서 변경: ${marker}`,
                 detail: `출력에서의 위치:\n${snippetAround(validationOutput, firstIndex, marker.length)}`
@@ -620,7 +654,9 @@ export function restoreTranslationStructure(text, protection, options = {}) {
     // 🚨 beta.9: 세그먼트 패턴 대조 — 마커 순서가 맞아도 텍스트가 블록 경계를 넘어
     // 이동하면(예: 상태창 앞 대사가 상태창 뒤로 밀림) 원문에서 비어있던 구간에
     // 내용이 생기거나 내용 있던 구간이 비게 됨 → 밀림으로 판정해 거부 (재시도 유도)
-    if (Array.isArray(protection.segmentPattern)) {
+    // 🚨 v1.1.12 (R): 문단 내 재배열 면제 시 구간 패턴 대조 생략 — 문단 집합
+    // 동일성 검사가 이미 블록 밀림을 차단하며, 재배열은 구간 유무 패턴을 정당하게 바꿈.
+    if (!reorderExcused && Array.isArray(protection.segmentPattern)) {
         const outPattern = computeSegmentPattern(validationOutput, protection.expectedMarkers);
         for (let i = 0; i < protection.segmentPattern.length; i++) {
             if (protection.segmentPattern[i] !== outPattern[i]) {
@@ -657,7 +693,8 @@ export function restoreTranslationStructure(text, protection, options = {}) {
             : restored.replace(token.marker, token.value);
     }
 
-    const validation = validateTranslationStructure(protection.source, restored, options);
+    const validation = validateTranslationStructure(protection.source, restored,
+        reorderExcused ? { ...options, allowInlineMacroReorder: true } : options);
     if (validation.repairedKeys > 0) {
         console.log(`[CAT] 🔧 구조 키 ${validation.repairedKeys}개 자동 복원`);
     }
@@ -726,7 +763,9 @@ export function validateTranslationStructure(source, output, options = {}) {
         ? normalizeBilingualMacroCopiesForValidation(normalized.text)
         : normalized.text;
     const parity = compareProtectedStructure(sourceText, validationText, {
-        blockDividerGrowth: options.sourceTruncated === true
+        blockDividerGrowth: options.sourceTruncated === true,
+        // 🚨 v1.1.12 (R): restore의 문단 내 재배열 면제 플래그 전달
+        allowInlineMacroReorder: options.allowInlineMacroReorder === true
     });
     if (!parity.ok) {
         const recovered = recoverBoundaryContextLeak(sourceText, normalized.text);
@@ -849,15 +888,29 @@ function compareProtectedStructure(source, output, options = {}) {
         softNote = `구분선 ${srcDiv}→${outDiv} ${outDiv < srcDiv ? '감소' : '증가'} — 소프트 허용 (번역 유지)`;
         console.warn(`[CAT] ⚠️ ${softNote}`);
     }
-    for (let i = 0; i < srcRest.length; i++) {
-        if (srcRest[i] !== outRest[i]) {
+    // 🚨 v1.1.12 (R): 문단 내 inline 재배열 면제가 확정된 호출에서만,
+    // 매크로 축을 '순서 비교'에서 '다중집합 비교'로 전환 (구분선 소프트 축과 동일 구조).
+    // 게이트: options.allowInlineMacroReorder — restore의 면제 판정이 참일 때만 전달됨.
+    let cmpSrc = srcRest, cmpOut = outRest;
+    if (options.allowInlineMacroReorder === true) {
+        const isMacroValue = v => /^\{\{[\s\S]*\}\}$/.test(v);
+        const srcMacros = srcRest.filter(isMacroValue).map(v => v.toLowerCase()).sort().join('|');
+        const outMacros = outRest.filter(isMacroValue).map(v => v.toLowerCase()).sort().join('|');
+        if (srcMacros === outMacros) {
+            cmpSrc = srcRest.filter(v => !isMacroValue(v));
+            cmpOut = outRest.filter(v => !isMacroValue(v));
+        }
+        // 다중집합 불일치면(매크로 자체가 바뀜) 전환 없이 기존 엄격 비교로 진행
+    }
+    for (let i = 0; i < cmpSrc.length; i++) {
+        if (cmpSrc[i] !== cmpOut[i]) {
             // 🚨 beta.3: {{User}}↔{{user}}처럼 대소문자만 다른 매크로는 ST가 동일하게
             // 치환하므로 구조 변경으로 취급하지 않는다 (모델의 케이스 통일 습관 흡수)
-            const isMacroPair = /^\{\{[\s\S]*\}\}$/.test(srcRest[i]) &&
-                /^\{\{[\s\S]*\}\}$/.test(outRest[i]) &&
-                srcRest[i].toLowerCase() === outRest[i].toLowerCase();
+            const isMacroPair = /^\{\{[\s\S]*\}\}$/.test(cmpSrc[i]) &&
+                /^\{\{[\s\S]*\}\}$/.test(cmpOut[i]) &&
+                cmpSrc[i].toLowerCase() === cmpOut[i].toLowerCase();
             if (isMacroPair) continue;
-            return { ok: false, reason: `구조 요소 변경: ${srcRest[i]}→${outRest[i]}` };
+            return { ok: false, reason: `구조 요소 변경: ${cmpSrc[i]}→${cmpOut[i]}` };
         }
     }
     
@@ -908,6 +961,8 @@ function compareProtectedStructure(source, output, options = {}) {
             if (i === 0 && isSafeLeadingPossessiveLayoutReorder(source, output)) {
                 continue;
             }
+            // 🚨 v1.1.12 (R): 면제 호출에선 매크로 재배열로 인한 구간 이동을 허용
+            if (options.allowInlineMacroReorder === true) continue;
             return { ok: false, reason: `구조 요소 위치 변경 (${i + 1}구간)` };
         }
     }
