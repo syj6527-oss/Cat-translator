@@ -1,8 +1,8 @@
 {
     "name": "cat-translator",
     "display_name": "🐱 Cat Translator",
-    "version": "1.1.13",
-    "description": "🐱 Cat Translator: 맞춤형 튜닝 UI & 스마트 자동번역",
+    "version": "1.2.0",
+    "description": "SillyTavern용 맞춤형 번역 확장 — 안정적인 병기 조립·사전 적용",
     "author": "냥헴 & GPT & Claude",
     "js": "index.js",
     "css": "style.css"

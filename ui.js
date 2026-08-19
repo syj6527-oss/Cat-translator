@@ -1,9 +1,9 @@
 // ============================================================
 // 🐱 Translator v1.1.0 - ui.js
 // ============================================================
-import { CAT_BETA_VERSION, catNotify, catNotifyProgress, getThemeEmoji, getCompletionEmoji, getModelTheme, setTextareaValue, resolveInputTranslationDirection, resolveInputUserPrompt } from './utils.js';
+import { CAT_BETA_VERSION, CAT_BUILD_CHANNEL, catNotify, catNotifyProgress, getThemeEmoji, getCompletionEmoji, getModelTheme, setTextareaValue, resolveInputTranslationDirection, resolveInputUserPrompt } from './utils.js';
 import { getStats, clearAllCache, exportSettings, importSettings, getHistory, togglePin, deleteHistoryItem } from './cache.js';
-import { fetchTranslation, gatherContextMessages, SYSTEM_SHIELD, STYLE_PRESETS, getLastDebugLog } from './translator.js';
+import { fetchTranslation, gatherContextMessages, SYSTEM_SHIELD, STYLE_PRESETS, getLastDebugLog, getTranslationStats } from './translator.js';
 
 let bulkAbortController = null;
 let isTranslatingInput = false;
@@ -131,11 +131,12 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
         </div>
         <div id="cat-drawer-content" class="inline-drawer-content" style="display:none; padding:10px;">
             <div class="cat-setting-row"><label>연결 프로필</label><select id="ct-profile" class="text_pole">${profileOptions}</select></div>
+            <div style="font-size:0.8em; opacity:0.65; margin:-2px 0 8px; line-height:1.45;">💡 번역용 프로필을 선택하면 그 프로필의 API·모델 설정을 사용하며, 아래 직접 연결 설정은 사용하지 않습니다.</div>
             <div id="ct-direct-toggle" class="cat-setting-row" style="cursor:pointer; opacity:0.7; font-size:0.85em; padding:4px 0;">
                 <span id="ct-direct-arrow">▶</span> <span>직접 연결 설정 (고급)</span>
             </div>
             <div id="ct-direct-settings" style="display:none;">
-                <div style="font-size:0.8em; opacity:0.6; margin-bottom:8px; padding:6px; border-radius:6px; background:var(--SmartThemeBlurTintColor, rgba(0,0,0,0.1));">💡 연결 프로필 사용을 권장합니다. 직접 연결은 <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--ca-accent);">Google AI Studio</a>에서 발급한 API Key(AIza...)가 필요합니다.</div>
+                <div style="font-size:0.8em; opacity:0.65; margin-bottom:8px; padding:6px; border-radius:6px; background:var(--SmartThemeBlurTintColor, rgba(0,0,0,0.1)); line-height:1.45;">⚡ 위에서 <b>직접 연결 모드</b>를 선택한 경우에만 사용합니다. <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--ca-accent);">Google AI Studio</a>에서 발급한 Gemini API Key(보통 AIza...)를 입력하세요. 키는 공유하거나 스크린샷에 노출하지 마세요.</div>
                 <div class="cat-setting-row" style="position:relative;">
                     <label>API Key</label>
                     <input type="password" id="ct-key" class="text_pole" value="${settings.customKey}" style="padding-right:36px;">
@@ -884,47 +885,61 @@ function enterTranslatedEdit(mesBlock, msg, msgId) {
 function showDebugPopup() {
     $('.cat-debug-overlay').remove();
     const log = getLastDebugLog();
+    const escapeDebugHtml = value => String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    const isLabBuild = CAT_BUILD_CHANNEL === 'lab';
+    const debugProduct = isLabBuild ? '🐱🔬 Cat Translator Lab' : '🐱 Cat Translator';
     const ts = log?.timestamp || '-';
     const mode = log?.mode || '(없음)';
     const model = log?.model || '(없음)';
     const error = log?.error || '(에러 없음)';
+    const assembly = log?.assembly || '(조립 없음)';
+    const glossary = log?.glossary || '(사전 보정 없음)';
     const recovery = log?.recovery || '(복구 없음)';
+    const notes = log?.notes || '(참고 없음)';
     const prompt = log?.prompt ? (log.prompt.length > 800 ? log.prompt.substring(0, 800) + '...(생략)' : log.prompt) : '(아직 요청 없음)';
     const raw = log?.rawResponse ? (log.rawResponse.length > 800 ? log.rawResponse.substring(0, 800) + '...(생략)' : log.rawResponse) : '(아직 LLM 응답 없음)';
     const cleaned = log?.cleaned ? (log.cleaned.length > 800 ? log.cleaned.substring(0, 800) + '...(생략)' : log.cleaned) : '(없음)';
     const thought = log?.thought ? (log.thought.length > 300 ? log.thought.substring(0, 300) + '...(생략)' : log.thought) : null;
+    const stats = getTranslationStats();
+    const sessionStatsLine = `세션 통계: 요청 ${stats.requests} · API 호출 ${stats.apiCalls} · 재시도 ${stats.retries} (검증 ${stats.validationRetries} · 통신 ${stats.transportRetries}) · 캐시 ${stats.cacheHits}`;
+    const resultStatsLine = `결과 통계: 정상 ${stats.success} · 부분병기 ${stats.partialBilingual} · 병기미달 ${stats.bilingualBelowTarget} · 실패 ${stats.hardFail} · 중단 ${stats.aborted} · 생략 ${stats.skipped} · 병기조립 ${stats.bilingualAssemblies} · 사전보정 ${stats.glossaryEnforcements}`;
 
     const overlay = $(`
     <dialog class="cat-debug-overlay" style="background:rgba(0,0,0,0.6); z-index:2147483647; display:none;">
         <div class="cat-debug-modal" style="background:var(--SmartThemeBodyColor, #222); color:var(--SmartThemeEmColor, #fff);">
             <div class="cat-debug-header">
-                <div class="cat-debug-title" style="font-size:1.1em; font-weight:bold;">🐱 마지막 LLM 응답 / 에러 로그</div>
+                <div class="cat-debug-title" style="font-size:1.1em; font-weight:bold;">${escapeDebugHtml(debugProduct)} 마지막 LLM 응답 / 에러 로그</div>
                 <span class="cat-debug-close" style="cursor:pointer; font-size:1.5em; opacity:0.6; padding:4px 8px;">✕</span>
             </div>
             <div class="cat-debug-body">
             <div style="background:rgba(255,100,100,0.1); border:1px solid rgba(255,100,100,0.3); border-radius:8px; padding:10px; margin-bottom:10px;">
                 <div style="font-weight:bold; margin-bottom:4px;">📌 에러 정보</div>
-                <div style="font-size:0.85em; opacity:0.8;">시각: ${ts}<br>에러: ${String(error).replace(/</g, '&lt;').replace(/>/g, '&gt;')}<br>복구: ${String(recovery).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+                <div style="font-size:0.85em; opacity:0.8;">시각: ${escapeDebugHtml(ts)}<br>에러: ${escapeDebugHtml(error)}<br>병기 조립: ${escapeDebugHtml(assembly)}<br>사전: ${escapeDebugHtml(glossary)}<br>복구: ${escapeDebugHtml(recovery)}<br>참고: ${escapeDebugHtml(notes)}</div>
             </div>
             <div style="background:rgba(100,180,255,0.1); border:1px solid rgba(100,180,255,0.3); border-radius:8px; padding:10px; margin-bottom:10px;">
                 <div style="font-weight:bold; margin-bottom:4px;">🔑 API 호출 상태</div>
-                <div style="font-size:0.85em; opacity:0.8;">모드: ${mode}<br>모델: ${model}</div>
+                <div style="font-size:0.85em; opacity:0.8;">모드: ${escapeDebugHtml(mode)}<br>모델: ${escapeDebugHtml(model)}<br>${escapeDebugHtml(sessionStatsLine)}<br>${escapeDebugHtml(resultStatsLine)}</div>
             </div>
             <div style="background:rgba(255,200,50,0.1); border:1px solid rgba(255,200,50,0.3); border-radius:8px; padding:10px; margin-bottom:10px;">
                 <div style="font-weight:bold; margin-bottom:4px;">📤 보낸 프롬프트 (${(log?.prompt || '').length}자)</div>
-                <div style="font-size:0.8em; opacity:0.8; white-space:pre-wrap; word-break:break-all; max-height:200px; overflow-y:auto; font-family:monospace;">${prompt.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+                <div style="font-size:0.8em; opacity:0.8; white-space:pre-wrap; word-break:break-all; max-height:200px; overflow-y:auto; font-family:monospace;">${escapeDebugHtml(prompt)}</div>
             </div>
             <div style="background:rgba(100,255,100,0.1); border:1px solid rgba(100,255,100,0.3); border-radius:8px; padding:10px; margin-bottom:10px;">
                 <div style="font-weight:bold; margin-bottom:4px;">📋 Raw LLM 응답 (${(log?.rawResponse || '').length}자)</div>
-                <div style="font-size:0.8em; opacity:0.8; white-space:pre-wrap; word-break:break-all; max-height:200px; overflow-y:auto; font-family:monospace;">${raw.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+                <div style="font-size:0.8em; opacity:0.8; white-space:pre-wrap; word-break:break-all; max-height:200px; overflow-y:auto; font-family:monospace;">${escapeDebugHtml(raw)}</div>
             </div>
             ${thought ? `<div style="background:rgba(200,100,255,0.1); border:1px solid rgba(200,100,255,0.3); border-radius:8px; padding:10px; margin-bottom:10px;">
                 <div style="font-weight:bold; margin-bottom:4px;">🧠 사고 과정</div>
-                <div style="font-size:0.8em; opacity:0.8; white-space:pre-wrap; word-break:break-all; max-height:150px; overflow-y:auto; font-family:monospace;">${thought.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+                <div style="font-size:0.8em; opacity:0.8; white-space:pre-wrap; word-break:break-all; max-height:150px; overflow-y:auto; font-family:monospace;">${escapeDebugHtml(thought)}</div>
             </div>` : ''}
             <div style="background:rgba(100,200,255,0.1); border:1px solid rgba(100,200,255,0.3); border-radius:8px; padding:10px; margin-bottom:10px;">
                 <div style="font-weight:bold; margin-bottom:4px;">✨ 후처리 결과 (${(log?.cleaned || '').length}자)</div>
-                <div style="font-size:0.8em; opacity:0.8; white-space:pre-wrap; word-break:break-all; max-height:200px; overflow-y:auto; font-family:monospace;">${cleaned.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+                <div style="font-size:0.8em; opacity:0.8; white-space:pre-wrap; word-break:break-all; max-height:200px; overflow-y:auto; font-family:monospace;">${escapeDebugHtml(cleaned)}</div>
             </div>
             <div style="display:flex; gap:8px; margin-bottom:8px;">
                 <button class="cat-debug-copy menu_button" style="flex:1;">📋 복사</button>
@@ -976,7 +991,7 @@ function showDebugPopup() {
         const attemptLines = Array.isArray(log?.attempts) && log.attempts.length
             ? log.attempts.map((a, i) => `${i + 1}차 [${a.time}] (${a.path}) ${a.reason}${a.detail ? '\n    ' + String(a.detail).replace(/\n/g, '\n    ') : ''}`).join('\n')
             : null;
-        const copyText = `[🐱 Cat Translator 디버그 로그]\n버전: ${CAT_BETA_VERSION}\n시각: ${ts}\n모드: ${mode}\n모델: ${model}\n에러: ${error}\n복구: ${recovery}${log?.validationDetail ? '\n\n--- 검증 상세 ---\n' + log.validationDetail : ''}${attemptLines ? '\n\n--- 시도 이력 ---\n' + attemptLines : ''}\n\n--- 프롬프트 ---\n${log?.prompt || '없음'}\n\n--- LLM 응답 ---\n${log?.rawResponse || '없음'}\n\n--- 후처리 결과 ---\n${log?.cleaned || '없음'}${thought ? '\n\n--- 사고 과정 ---\n' + thought : ''}`;
+        const copyText = `[${debugProduct} 디버그 로그]\n버전: ${CAT_BETA_VERSION}\n${sessionStatsLine}\n${resultStatsLine}\n시각: ${ts}\n모드: ${mode}\n모델: ${model}\n에러: ${error}\n병기 조립: ${assembly}\n사전: ${glossary}\n복구: ${recovery}\n참고: ${notes}${log?.validationDetail ? '\n\n--- 검증 상세 ---\n' + log.validationDetail : ''}${attemptLines ? '\n\n--- 시도 이력 ---\n' + attemptLines : ''}\n\n--- 프롬프트 ---\n${log?.prompt || '없음'}\n\n--- LLM 응답 ---\n${log?.rawResponse || '없음'}\n\n--- 후처리 결과 ---\n${log?.cleaned || '없음'}${thought ? '\n\n--- 사고 과정 ---\n' + thought : ''}`;
         catCopyToClipboard(copyText).then(ok => ok
             ? catNotify('📋 디버그 로그 복사 완료!', 'success')
             : catNotify('복사 실패 — 로그 창의 텍스트를 길게 눌러 수동 복사해주세요', 'warning'));

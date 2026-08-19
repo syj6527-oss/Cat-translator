@@ -22,6 +22,20 @@ export function isDividerElement(value) {
     return dividerLineRegex().test(String(value ?? ''));
 }
 
+// ST 저장/스와이프 동기화가 바꾸는 표현 차이는 사용자 편집으로 보지 않는다.
+// 의미 있는 본문 수정은 그대로 구분하되 CRLF↔LF, NFC, 줄끝 공백만 정규화한다.
+export function normalizeSourceForEditCompare(text) {
+    return String(text ?? '')
+        .replace(/\r\n?/g, '\n')
+        .normalize('NFC')
+        .replace(/[\t ]+$/gm, '')
+        .trim();
+}
+
+export function isSameSourceForEdit(a, b) {
+    return normalizeSourceForEditCompare(a) === normalizeSourceForEditCompare(b);
+}
+
 export function getThemeEmoji() {
     const theme = document.body.getAttribute('data-cat-theme');
     return theme === 'tiger' ? '🐯' : '🐱';
@@ -79,7 +93,8 @@ export function catNotifyProgress(message, onAbort) {
 }
 
 // 🚨 정밀 클리너: AI가 추가한 래핑만 제거, 원본 코드블록/YAML 보존!
-export const CAT_BETA_VERSION = '1.1.13';
+export const CAT_BETA_VERSION = '1.2.0';
+export const CAT_BUILD_CHANNEL = 'release';
 
 export function cleanResult(text, originalText = null, structureProtection = null) {
     if (!text) return "";
@@ -207,9 +222,48 @@ export function cleanResult(text, originalText = null, structureProtection = nul
     return cleaned.trim();
 }
 
+// 한국어에서는 목적격·소유격·주격 대명사가 문맥상 자연스럽게 생략될 수 있다.
+// {{obj}}/{{poss}}/{{subj}}는 정체성 매크로가 아니라 문법 슬롯이므로, 한국어
+// 번역에서만 소프트 생략을 허용한다. {{user}}/{{char}}/{{User}} 등 실제 엔티티와
+// 태그·펜스·코드행은 계속 하드 구조로 취급한다.
+export function isKoreanGrammarMacro(value) {
+    const match = String(value || '').match(/^\{\{\s*([^{}:\s]+)(?:::[\s\S]*)?\s*\}\}$/);
+    return !!match && /^(?:obj|poss|subj)$/i.test(match[1]);
+}
+
+function classifyProtectedToken(value, type) {
+    const raw = String(value ?? '');
+    const macro = /^\{\{[\s\S]*?\}\}$/.test(raw);
+    if (macro) {
+        const allowKoreanOmission = isKoreanGrammarMacro(raw);
+        return {
+            role: allowKoreanOmission ? 'grammar_macro' : 'identity_macro',
+            required: !allowKoreanOmission,
+            hardStructure: false,
+            allowKoreanOmission
+        };
+    }
+    return {
+        role: 'hard_structure',
+        required: true,
+        hardStructure: true,
+        allowKoreanOmission: false
+    };
+}
+
+function isMacroToken(token) {
+    return token?.role === 'grammar_macro' || token?.role === 'identity_macro' ||
+        /^\{\{[\s\S]*?\}\}$/.test(String(token?.value || ''));
+}
+
+function canOmitProtectedToken(token, options = {}) {
+    return options.allowKoreanGrammarMacroOmission === true &&
+        token?.allowKoreanOmission === true;
+}
+
 // 번역 대상의 구조 문법은 토큰으로 잠그고, 사람에게 읽히는 내용만 모델에 노출한다.
-// 모델이 토큰을 누락하거나 순서를 바꾸면 복원 단계에서 결과를 거부한다.
-export function protectTranslationStructure(text) {
+// 하드 구조가 누락되거나 순서를 바꾸면 복원 단계에서 결과를 거부한다.
+export function protectTranslationStructure(text, options = {}) {
     const source = String(text || '').replace(/\r\n/g, '\n');
     let namespace = 'CATFMT';
     while (source.includes(`@@${namespace}_`)) namespace += 'X';
@@ -217,12 +271,47 @@ export function protectTranslationStructure(text) {
     const tokens = [];
     const addToken = (value, type) => {
         const marker = `@@${namespace}_${String(tokens.length).padStart(4, '0')}@@`;
-        tokens.push({ marker, value, type });
+        tokens.push({ marker, value, type, ...classifyProtectedToken(value, type) });
         return marker;
     };
     
+    // 병기 모드의 실제 대사마다 빈 하드 앵커를 따옴표 안쪽에 삽입한다.
+    // 모델은 내용은 번역하되 서로 다른 대사 슬롯을 합치거나 쪼갤 수 없다.
+    let protectedText = source;
+    const dialogueRanges = Array.isArray(options.dialogueRanges)
+        ? options.dialogueRanges
+            .filter(range => Number.isInteger(range?.index) && Number.isInteger(range?.contentLength))
+            .sort((a, b) => a.index - b.index)
+        : [];
+    if (dialogueRanges.length > 0) {
+        let cursor = 0;
+        let anchored = '';
+        for (const range of dialogueRanges) {
+            const contentStart = range.index + 1;
+            const contentEnd = contentStart + range.contentLength;
+            const open = source[range.index];
+            const close = source[contentEnd];
+            const validQuotePair = (open === '"' && close === '"') ||
+                (open === '“' && close === '”') ||
+                (open === '「' && close === '」') ||
+                (open === '『' && close === '』');
+            // 범위는 보호기에 들어온 바로 그 문자열을 가리켜야 한다. 줄바꿈 정규화나
+            // 전처리 불일치가 다시 생겨도 엉뚱한 서술 중간에는 절대 앵커를 넣지 않는다.
+            if (range.index < cursor || contentStart > source.length ||
+                contentEnd >= source.length || !validQuotePair) {
+                continue;
+            }
+            anchored += source.slice(cursor, contentStart);
+            anchored += addToken('', 'dialogue-open');
+            anchored += source.slice(contentStart, contentEnd);
+            anchored += addToken('', 'dialogue-close');
+            cursor = contentEnd;
+        }
+        protectedText = anchored + source.slice(cursor);
+    }
+
     // 실제 펜스를 숨겨 모델이 코드로 취급해 내부 번역을 건너뛰는 것을 막는다.
-    let protectedText = source.replace(/```[^\n]*\n[\s\S]*?```/g, (block) => {
+    protectedText = protectedText.replace(/```[^\n]*\n[\s\S]*?```/g, (block) => {
         const firstBreak = block.indexOf('\n');
         const closeIndex = block.lastIndexOf('```');
         if (firstBreak < 0 || closeIndex <= firstBreak) return block;
@@ -555,6 +644,7 @@ export function restoreTranslationStructure(text, protection, options = {}) {
     
     const rawOutput = String(text || '');
     let output = normalizeProtectedStructureResponse(rawOutput, protection);
+    const tokenByMarker = new Map((protection.tokens || []).map(token => [token.marker, token]));
     // 🚨 v1.1.4-beta.6 (J): 인접 이중 마커 삼킴 자동 구제.
     // 들여쓰기 리스트/상태창을 보호하면 @@CATFMT_0018@@@@CATFMT_0019@@처럼
     // 마커가 딱 붙은 쌍이 생기는데(들여쓰기 토큰+내용 토큰), LLM이 이런 연속
@@ -565,6 +655,9 @@ export function restoreTranslationStructure(text, protection, options = {}) {
     // 재삽입 위치는 원문과 동일한 쪽(파트너의 앞/뒤)이므로 순서가 보존된다.
     for (const marker of protection.expectedMarkers) {
         if (output.includes(marker)) continue;
+        // 한국어 문법 슬롯은 실제 생략일 수 있다. 하드 구조용 인접 마커 구제 로직이
+        // 이를 되살려 부자연스러운 매크로를 강제로 삽입하지 않게 먼저 제외한다.
+        if (canOmitProtectedToken(tokenByMarker.get(marker), options)) continue;
         const before = protection.text.match(new RegExp(`(@@CATFMT_\\d{4}@@)${marker}`));
         const after = protection.text.match(new RegExp(`${marker}(@@CATFMT_\\d{4}@@)`));
         const partnerBefore = before ? before[1] : null;   // 원문에서 marker 바로 앞에 붙은 마커
@@ -595,6 +688,14 @@ export function restoreTranslationStructure(text, protection, options = {}) {
     // ② 원문/출력의 문단(빈 줄 경계) 수가 동일 ③ 각 문단의 마커 '집합'이 동일
     //   (= 문단 경계를 넘는 이동 없음 — 진짜 사고인 블록 밀림은 계속 차단)
     // ④ inline 외 타입(펜스·코드행·들여쓰기·통행) 토큰의 상대 순서는 불변.
+    // 🚨 v1.2.0 (역할 분리 — 단일 진실 공급원): 매크로는 '번역 금지 placeholder'이지
+    // 구조 경계가 아니다. 아래 8층 검증 전부가 이 집합 하나를 공유한다.
+    const _macroMarkers = new Set(protection.tokens
+        .filter(isMacroToken)
+        .map(t => t.marker));
+    const _softOmittableMarkers = new Set(protection.tokens
+        .filter(token => canOmitProtectedToken(token, options))
+        .map(token => token.marker));
     const reorderExemption = (() => {
         const markersIn = txt => (String(txt).match(/@@CATFMT_\d{4}@@/g) || []);
         const allOnce = protection.expectedMarkers.every(m =>
@@ -608,9 +709,9 @@ export function restoreTranslationStructure(text, protection, options = {}) {
             const b = markersIn(outParas[i]).slice().sort().join('|');
             if (a !== b) return false;
         }
-        const nonInline = new Set(protection.tokens
-            .filter(t => t.type !== 'inline').map(t => t.marker));
-        const seq = txt => markersIn(txt).filter(m => nonInline.has(m)).join('|');
+        // v1.2.0: 순서 불변 요구를 '비매크로 전체'(태그 포함)로 — 태그 재배열은
+        // R 사면 대상에서 제외 (매트릭스: 태그 순서 변경은 거부해야 하는 손상)
+        const seq = txt => markersIn(txt).filter(m => !_macroMarkers.has(m)).join('|');
         if (seq(protection.text) !== seq(validationOutput)) return false;
         return true;
     })();
@@ -620,35 +721,55 @@ export function restoreTranslationStructure(text, protection, options = {}) {
     for (const marker of protection.expectedMarkers) {
         const firstIndex = validationOutput.indexOf(marker);
         if (firstIndex < 0) {
+            if (_softOmittableMarkers.has(marker)) {
+                const token = tokenByMarker.get(marker);
+                console.warn(`[CAT] 🪶 한국어 문법 매크로 생략 허용: ${token?.value || marker}`);
+                continue;
+            }
             const sourcePos = protection.text.indexOf(marker);
             return {
-                ok: false, text: null, reason: `구조 토큰 누락: ${marker}`,
+                ok: false, text: null, code: 'VALIDATION_TOKEN_MISSING_HARD', reason: `구조 토큰 누락: ${marker}`,
                 detail: `원문에서 이 토큰의 자리:\n${snippetAround(protection.text, sourcePos, marker.length)}`
             };
         }
         const secondIndex = validationOutput.indexOf(marker, firstIndex + marker.length);
-        if (secondIndex >= 0) {
+        if (secondIndex >= 0 && _macroMarkers.has(marker)) {
+            // 🚨 v1.2.0: 매크로 복제 허용 — 원문에 있던 placeholder의 재사용은
+            // 복원 시 정당한 이름 재호출이 된다 (한국어의 대명사 회피 습관)
+            console.log(`[CAT] 🐾 매크로 복제 허용: ${marker}`);
+        } else if (secondIndex >= 0) {
             return {
-                ok: false, text: null, reason: `구조 토큰 중복: ${marker}`,
+                ok: false, text: null, code: 'VALIDATION_TOKEN_DUPLICATED_HARD', reason: `구조 토큰 중복: ${marker}`,
                 detail: `1번째 등장:\n${snippetAround(validationOutput, firstIndex, marker.length)}\n\n2번째 등장:\n${snippetAround(validationOutput, secondIndex, marker.length)}`
             };
         }
-        if (firstIndex <= previousIndex && reorderExemption) {
+        if (_macroMarkers.has(marker)) {
+            // 🚨 v1.2.0: 매크로는 순서 검사 자체에서 제외 (previousIndex 진행에도 불참)
+        } else if (firstIndex <= previousIndex && reorderExemption) {
             if (!reorderExcused) console.log('[CAT] 🔀 문단 내 inline 토큰 어순 재배열 허용 (한국어 통사 재배치)');
             reorderExcused = true;
+            previousIndex = firstIndex;
         } else if (firstIndex <= previousIndex) {
             return {
                 ok: false, text: null, reason: `구조 토큰 순서 변경: ${marker}`,
                 detail: `출력에서의 위치:\n${snippetAround(validationOutput, firstIndex, marker.length)}`
             };
+        } else {
+            previousIndex = firstIndex;
         }
-        previousIndex = firstIndex;
     }
     
     const markerPattern = new RegExp(`@@${protection.namespace}_\\d{4}@@`, 'g');
     const outputMarkers = validationOutput.match(markerPattern) || [];
-    if (outputMarkers.length !== protection.expectedMarkers.length) {
-        return { ok: false, text: null, reason: '알 수 없는 구조 토큰이 추가되었거나 삭제됨' };
+    const _expectedSet = new Set(protection.expectedMarkers);
+    if (outputMarkers.some(m => !_expectedSet.has(m))) {
+        return { ok: false, text: null, code: 'VALIDATION_TOKEN_UNKNOWN', reason: '알 수 없는 구조 토큰이 추가되었거나 삭제됨' };
+    }
+    // 🚨 v1.2.0: 총수 검사는 하드 토큰만 — 매크로 복제로 총수가 늘어도 정당
+    const _hardOut = outputMarkers.filter(m => !_macroMarkers.has(m)).length;
+    const _hardExp = protection.expectedMarkers.filter(m => !_macroMarkers.has(m)).length;
+    if (_hardOut !== _hardExp) {
+        return { ok: false, text: null, code: 'VALIDATION_TOKEN_COUNT_HARD', reason: '알 수 없는 구조 토큰이 추가되었거나 삭제됨' };
     }
     
     // 🚨 beta.9: 세그먼트 패턴 대조 — 마커 순서가 맞아도 텍스트가 블록 경계를 넘어
@@ -656,26 +777,29 @@ export function restoreTranslationStructure(text, protection, options = {}) {
     // 내용이 생기거나 내용 있던 구간이 비게 됨 → 밀림으로 판정해 거부 (재시도 유도)
     // 🚨 v1.1.12 (R): 문단 내 재배열 면제 시 구간 패턴 대조 생략 — 문단 집합
     // 동일성 검사가 이미 블록 밀림을 차단하며, 재배열은 구간 유무 패턴을 정당하게 바꿈.
-    if (!reorderExcused && Array.isArray(protection.segmentPattern)) {
-        const outPattern = computeSegmentPattern(validationOutput, protection.expectedMarkers);
-        for (let i = 0; i < protection.segmentPattern.length; i++) {
-            if (protection.segmentPattern[i] !== outPattern[i]) {
+    const _hardMarkers = protection.expectedMarkers.filter(m => !_macroMarkers.has(m));
+    if (!reorderExcused && Array.isArray(protection.segmentPattern) && _hardMarkers.length > 0) {
+        // 🚨 v1.2.0: 블록 경계는 하드 토큰만 — 매크로를 뺀 패턴으로 양측 재계산
+        const srcPatternHard = computeSegmentPattern(protection.text, _hardMarkers);
+        const outPattern = computeSegmentPattern(validationOutput, _hardMarkers);
+        for (let i = 0; i < srcPatternHard.length; i++) {
+            if (srcPatternHard[i] !== outPattern[i]) {
                 // 🚨 beta.3: 한국어 SOV 어순 재배치 허용 — 원문이 토큰으로 문장을 끝내면
                 // (he spots {{user}}.) 한국어 번역은 조사+서술어가 토큰 뒤로 이동함
                 // ({{user}}를 발견했다.) → 빈 구간 침입이 "직전 토큰에 공백 없이 붙은
                 // 짧은 한국어 꼬리"뿐이면 블록 밀림이 아니므로 통과시킨다.
-                if (!protection.segmentPattern[i] && outPattern[i] && i > 0 &&
-                    isKoreanTailSegment(getSegmentByMarkers(validationOutput, protection.expectedMarkers, i))) {
+                if (!srcPatternHard[i] && outPattern[i] && i > 0 &&
+                    isKoreanTailSegment(getSegmentByMarkers(validationOutput, _hardMarkers, i))) {
                     continue;
                 }
                 // 🚨 v1.1.4: 첫 구간 소유격 매크로 어순 재배치 (원문 있음→출력 빈 구간, i===0)
-                if (i === 0 && protection.segmentPattern[0] && !outPattern[0] &&
+                if (i === 0 && srcPatternHard[0] && !outPattern[0] &&
                     isSafeLeadingPossessiveMacroReorder(protection, validationOutput)) {
                     continue;
                 }
-                const kind = protection.segmentPattern[i] ? '구간 내용 소실' : '빈 구간에 텍스트 침입';
-                const srcSeg = getSegmentByMarkers(protection.text, protection.expectedMarkers, i);
-                const outSeg = getSegmentByMarkers(validationOutput, protection.expectedMarkers, i);
+                const kind = srcPatternHard[i] ? '구간 내용 소실' : '빈 구간에 텍스트 침입';
+                const srcSeg = getSegmentByMarkers(protection.text, _hardMarkers, i);
+                const outSeg = getSegmentByMarkers(validationOutput, _hardMarkers, i);
                 return {
                     ok: false, text: null,
                     reason: `텍스트가 블록 경계를 넘어 이동함 (${kind}, 구간 ${i})`,
@@ -686,12 +810,30 @@ export function restoreTranslationStructure(text, protection, options = {}) {
     }
     
     let restored = output;
+    // 한국어에서는 {{obj}}/{{poss}}/{{subj}}가 조사와 함께 쓰이지 않으면 생략 가능하다.
+    // 모델이 이를 이미 완결된 서술어 뒤·문장부호 앞에 고립시키면(…했다{{poss}}.)
+    // 보존할 문법 기능이 없으므로 복원 전에 해당 소프트 슬롯만 제거한다.
     for (const token of protection.tokens) {
-        const isMacro = /^\{\{[\s\S]*?\}\}$/.test(token.value);
-        restored = allowBilingualMacroCopies && isMacro
-            ? restored.split(token.marker).join(token.value)
-            : restored.replace(token.marker, token.value);
+        if (!canOmitProtectedToken(token, options)) continue;
+        const escaped = escapeRegExp(token.marker);
+        const stranded = new RegExp(`${escaped}(?=\\s*(?:[.!?…,;:)}\\]"'»]|$))`, 'g');
+        const cleaned = restored.replace(stranded, '');
+        if (cleaned !== restored) {
+            console.log(`[CAT] 🪶 문장 끝 고립 문법 매크로 제거: ${token.value}`);
+            restored = cleaned;
+        }
     }
+    for (const token of protection.tokens) {
+        // 🚨 v1.2.0: 전체 치환 — 매크로 복제 허용에 따라 모든 등장을 복원
+        restored = restored.split(token.marker).join(token.value);
+    }
+    // 🚨 v1.2.0: 복원 후 미해결 보호 토큰 잔존 검사 (매트릭스 필수 거부)
+    markerPattern.lastIndex = 0;
+    if (markerPattern.test(restored)) {
+        markerPattern.lastIndex = 0;
+        return { ok: false, text: null, reason: '복원 후 미해결 보호 토큰 잔존' };
+    }
+    markerPattern.lastIndex = 0;
 
     const validation = validateTranslationStructure(protection.source, restored,
         reorderExcused ? { ...options, allowInlineMacroReorder: true } : options);
@@ -764,11 +906,12 @@ export function validateTranslationStructure(source, output, options = {}) {
         : normalized.text;
     const parity = compareProtectedStructure(sourceText, validationText, {
         blockDividerGrowth: options.sourceTruncated === true,
+        allowKoreanGrammarMacroOmission: options.allowKoreanGrammarMacroOmission === true,
         // 🚨 v1.1.12 (R): restore의 문단 내 재배열 면제 플래그 전달
         allowInlineMacroReorder: options.allowInlineMacroReorder === true
     });
     if (!parity.ok) {
-        const recovered = recoverBoundaryContextLeak(sourceText, normalized.text);
+        const recovered = recoverBoundaryContextLeak(sourceText, normalized.text, options);
         if (recovered) {
             return {
                 ok: true,
@@ -789,7 +932,7 @@ export function validateTranslationStructure(source, output, options = {}) {
 
 // 일부 모델이 이전 문맥의 완결된 정보블럭을 현재 번역 앞뒤에 붙이는 경우만 복구한다.
 // 내부 삽입이나 후보가 둘 이상인 응답은 원문 일부를 잘못 버릴 수 있으므로 그대로 거부한다.
-function recoverBoundaryContextLeak(source, output) {
+function recoverBoundaryContextLeak(source, output, options = {}) {
     const sourceMatches = getStructureMatches(source);
     const outputMatches = getStructureMatches(output);
     if (sourceMatches.length === 0 || outputMatches.length <= sourceMatches.length) {
@@ -824,7 +967,7 @@ function recoverBoundaryContextLeak(source, output) {
 
         const candidateText = output.slice(start, end).trim();
         const normalized = repairStructuredKeyPrefixes(source, candidateText);
-        const parity = compareProtectedStructure(source, normalized.text);
+        const parity = compareProtectedStructure(source, normalized.text, options);
         if (!parity.ok) continue;
 
         candidates.set(normalized.text, {
@@ -864,14 +1007,32 @@ function compareProtectedStructure(source, output, options = {}) {
     const outRest = outputSignature.filter(el => !isDividerElement(el));
     const srcDiv = sourceSignature.length - srcRest.length;
     const outDiv = outputSignature.length - outRest.length;
-    let softNote = null;
+    const softNotes = [];
 
-    if (srcRest.length !== outRest.length) {
+    // 매크로 축은 유일 집합 기준으로 비교하되, 한국어 문법 슬롯
+    // ({{obj}}/{{poss}}/{{subj}})만 문맥상 생략을 소프트 허용한다.
+    // 엔티티 매크로 소실·신종은 계속 하드 거부하고, 복제·순서는 자유다.
+    const _isMacroVal = v => /^\{\{[\s\S]*?\}\}$/.test(v);
+    const _srcMacroSet = new Set(srcRest.filter(_isMacroVal).map(v => v.toLowerCase()));
+    const _outMacroSet = new Set(outRest.filter(_isMacroVal).map(v => v.toLowerCase()));
+    for (const v of _srcMacroSet) if (!_outMacroSet.has(v)) {
+        if (options.allowKoreanGrammarMacroOmission === true && isKoreanGrammarMacro(v)) {
+            softNotes.push(`한국어 문법 매크로 생략 허용: ${v}`);
+            continue;
+        }
+        return { ok: false, reason: `구조 요소 변경: ${v}→(소실)` };
+    }
+    for (const v of _outMacroSet) if (!_srcMacroSet.has(v)) {
+        return { ok: false, reason: `구조 요소 변경: (원문 없음)→${v}` };
+    }
+    const srcHard = srcRest.filter(v => !_isMacroVal(v));
+    const outHard = outRest.filter(v => !_isMacroVal(v));
+    if (srcHard.length !== outHard.length) {
         const srcAudit = auditDividerLines(source);
         const outAudit = auditDividerLines(output);
         return {
             ok: false,
-            reason: `구조 요소 개수 불일치: ${sourceSignature.length}→${outputSignature.length}`,
+            reason: `구조 요소 개수 불일치: ${srcHard.length}→${outHard.length}`,
             detail: `원문 요소: ${sourceSignature.join(' | ').slice(0, 200)}\n출력 요소: ${outputSignature.join(' | ').slice(0, 200)}\n원문 구분선 ${srcAudit.matched.length}개 / 출력 구분선 ${outAudit.matched.length}개` +
                 (outAudit.nearMiss.length ? `\n⚠️ 출력의 매칭 실패 유사 구분선:\n${outAudit.nearMiss.slice(0, 5).join('\n')}` : '') +
                 (srcAudit.nearMiss.length ? `\n⚠️ 원문의 매칭 실패 유사 구분선:\n${srcAudit.nearMiss.slice(0, 5).join('\n')}` : '')
@@ -885,23 +1046,15 @@ function compareProtectedStructure(source, output, options = {}) {
                 detail: `절단된 원문에서 구분선이 ${srcDiv}→${outDiv}로 늘어남 — 절단점 너머 창작 의심`
             };
         }
-        softNote = `구분선 ${srcDiv}→${outDiv} ${outDiv < srcDiv ? '감소' : '증가'} — 소프트 허용 (번역 유지)`;
-        console.warn(`[CAT] ⚠️ ${softNote}`);
+        const dividerNote = `구분선 ${srcDiv}→${outDiv} ${outDiv < srcDiv ? '감소' : '증가'} — 소프트 허용 (번역 유지)`;
+        softNotes.push(dividerNote);
+        console.warn(`[CAT] ⚠️ ${dividerNote}`);
     }
     // 🚨 v1.1.12 (R): 문단 내 inline 재배열 면제가 확정된 호출에서만,
     // 매크로 축을 '순서 비교'에서 '다중집합 비교'로 전환 (구분선 소프트 축과 동일 구조).
     // 게이트: options.allowInlineMacroReorder — restore의 면제 판정이 참일 때만 전달됨.
-    let cmpSrc = srcRest, cmpOut = outRest;
-    if (options.allowInlineMacroReorder === true) {
-        const isMacroValue = v => /^\{\{[\s\S]*\}\}$/.test(v);
-        const srcMacros = srcRest.filter(isMacroValue).map(v => v.toLowerCase()).sort().join('|');
-        const outMacros = outRest.filter(isMacroValue).map(v => v.toLowerCase()).sort().join('|');
-        if (srcMacros === outMacros) {
-            cmpSrc = srcRest.filter(v => !isMacroValue(v));
-            cmpOut = outRest.filter(v => !isMacroValue(v));
-        }
-        // 다중집합 불일치면(매크로 자체가 바뀜) 전환 없이 기존 엄격 비교로 진행
-    }
+    // v1.2.0: 순서 비교는 하드 요소만 (매크로는 위에서 집합으로 이미 판정)
+    const cmpSrc = srcHard, cmpOut = outHard;
     for (let i = 0; i < cmpSrc.length; i++) {
         if (cmpSrc[i] !== cmpOut[i]) {
             // 🚨 beta.3: {{User}}↔{{user}}처럼 대소문자만 다른 매크로는 ST가 동일하게
@@ -944,8 +1097,10 @@ function compareProtectedStructure(source, output, options = {}) {
         }
     }
 
-    const sourceLayout = getStructureLayout(source);
-    const outputLayout = getStructureLayout(output);
+    // 🚨 v1.2.0: 매크로는 배치/구간 경계가 아님 — 제거 후 레이아웃 계산
+    const _stripMacros = t => String(t).replace(/\{\{[\s\S]*?\}\}/g, '');
+    const sourceLayout = getStructureLayout(_stripMacros(source));
+    const outputLayout = getStructureLayout(_stripMacros(output));
     if (sourceLayout.regions !== outputLayout.regions) {
         return {
             ok: false,
@@ -966,7 +1121,7 @@ function compareProtectedStructure(source, output, options = {}) {
             return { ok: false, reason: `구조 요소 위치 변경 (${i + 1}구간)` };
         }
     }
-    return { ok: true, reason: null, softNote };
+    return { ok: true, reason: null, softNote: softNotes.join(' / ') || null };
 }
 
 function getStructureSignature(text) {
@@ -1429,28 +1584,57 @@ export function detectLanguageDirection(text, settings) {
     return { isToEnglish: false, targetLang: settings.targetLang };
 }
 
+function parseDictionaryLine(line, isToEnglish = false) {
+    if (!String(line || '').includes('=')) return null;
+    const [left, ...rightParts] = String(line).split('=');
+    const orig = left.trim();
+    const trans = rightParts.join('=').trim();
+    if (!orig || !trans) return null;
+    return {
+        originalLine: `${orig}=${trans}`,
+        source: isToEnglish ? trans : orig,
+        target: isToEnglish ? orig : trans
+    };
+}
+
+function dictionaryTermRegex(term, flags = 'gi') {
+    const escaped = String(term).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // 영문 단어는 경계를 적용해 Ghost가 Ghostbusters 안에서 잡히지 않게 한다.
+    const isLatinWord = /^[a-zA-Z]/.test(term) && /[a-zA-Z]$/.test(term);
+    return new RegExp(isLatinWord ? `\\b${escaped}\\b` : escaped, flags);
+}
+
+// 현재 원문에 실제 등장한 항목만 반환한다. 프롬프트 필터·결과 강제 적용·품질 검사가
+// 같은 경계 규칙을 공유해 includes() 계열의 부분 문자열 오탐이 다시 생기지 않게 한다.
+export function getMatchedDictionaryLines(text, dictionary, isToEnglish = false) {
+    if (!dictionary || !String(dictionary).trim()) return [];
+    const source = String(text || '');
+    return String(dictionary)
+        .split('\n')
+        .map(line => parseDictionaryLine(line, isToEnglish))
+        .filter(Boolean)
+        .filter(entry => dictionaryTermRegex(entry.source, 'i').test(source))
+        .sort((a, b) => b.source.length - a.source.length)
+        .map(entry => entry.originalLine);
+}
+
 export function applyPreReplace(text, dictionary, isToEnglish) { return applyPreReplaceWithCount(text, dictionary, isToEnglish).swapped; }
 export function applyPreReplaceWithCount(text, dictionary, isToEnglish) {
-    if (!dictionary || dictionary.trim() === "") return { swapped: text, matchCount: 0 };
-    const lines = dictionary.split('\n').filter(l => l.includes('='));
-    if (lines.length === 0) return { swapped: text, matchCount: 0 };
+    if (!dictionary || String(dictionary).trim() === "") return { swapped: text, matchCount: 0 };
+    const entries = String(dictionary)
+        .split('\n')
+        .map(line => parseDictionaryLine(line, isToEnglish))
+        .filter(Boolean)
+        .sort((a, b) => b.source.length - a.source.length);
+    if (entries.length === 0) return { swapped: text, matchCount: 0 };
 
     let result = text; let matchCount = 0;
-    lines.sort((a, b) => b.split('=')[0].length - a.split('=')[0].length);
-
-    lines.forEach(line => {
-        const parts = line.split('=');
-        if (parts.length >= 2) {
-            const orig = parts[0].trim(); const trans = parts.slice(1).join('=').trim();
-            const searchStr = isToEnglish ? trans : orig; const replaceStr = isToEnglish ? orig : trans;
-            if (searchStr && replaceStr) {
-                const escaped = searchStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                // 🚨 영문 단어는 word boundary 적용 (bro가 broken 안에서 매칭되는 것 방지)
-                const isLatinWord = /^[a-zA-Z]/.test(searchStr) && /[a-zA-Z]$/.test(searchStr);
-                const pattern = isLatinWord ? `\\b${escaped}\\b` : escaped;
-                const regex = new RegExp(pattern, 'gi'); const matches = result.match(regex);
-                if (matches) { matchCount += matches.length; result = result.replace(regex, replaceStr); }
-            }
+    entries.forEach(({ source, target }) => {
+        const regex = dictionaryTermRegex(source, 'gi');
+        const matches = String(result).match(regex);
+        if (matches) {
+            matchCount += matches.length;
+            result = String(result).replace(regex, target);
         }
     });
     return { swapped: result, matchCount };

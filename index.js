@@ -2,7 +2,7 @@
 // 🐱 Translator v1.1.0
 // ============================================================
 import { extension_settings, getContext } from '../../../../scripts/extensions.js';
-import { catNotify, getThemeEmoji, getCompletionEmoji, setTextareaValue, getModelTheme, detectLanguageDirection, getCacheModelKey, buildLiteralDetailsHtml, stripLiteralDetails, analyzeLanguage, isClearlyLanguage, resolveInputTranslationDirection, resolveInputUserPrompt } from './utils.js';
+import { catNotify, getThemeEmoji, getCompletionEmoji, setTextareaValue, getModelTheme, detectLanguageDirection, getCacheModelKey, buildLiteralDetailsHtml, stripLiteralDetails, analyzeLanguage, isClearlyLanguage, resolveInputTranslationDirection, resolveInputUserPrompt, isSameSourceForEdit } from './utils.js';
 import { initCache, deleteCached } from './cache.js';
 import { fetchTranslation, gatherContextMessages } from './translator.js';
 import { setupSettingsPanel, collectSettings, updateCacheStats, injectMessageButtons, injectInputButtons, setupDragDictionary, setupMutationObserver, showHistoryPopup, applyTheme, setSuppressAutoSave, clearPendingAutoSave, abortBulkTranslation, isTranslatedEditActive, markTranslatedEditSave, clearTranslatedEditSessions } from './ui.js';
@@ -1047,7 +1047,10 @@ jQuery(async () => {
         }
         
         // 영어가 실제로 수정되었는지 확인
-        if (newOriginal === msg.extra.original_mes) return;
+        if (isSameSourceForEdit(newOriginal, msg.extra.original_mes)) {
+            console.log(`[CAT] 🫧 저장 형식 차이 무시 #${id} (원문 수정 아님)`);
+            return;
+        }
         // 🚨 v1.1.11 (Q): 진행 중 번역 양보 — 폴러(3초 백업)가 이후 재시도하므로
         // 여기서 소비하지 않고 물러난다 (진행 중 번역 중단 방지).
         const inflightEdit = _activeTranslationAborts.get(parseInt(id, 10));
@@ -1240,13 +1243,10 @@ jQuery(async () => {
     // 5초 간격 상시 감시
     setInterval(() => repairContamination('watchdog'), 5000);
     
-    // 🚨 원문 수정 감지 폴링 (자동 재번역/알림 백업) — 3초 간격
-    // 이벤트/옵저버가 누락해도 폴링으로 100% 잡음
-    const _editPollProcessed = new Map(); // idx → 처리한 텍스트 fingerprint
-    stContext.eventSource.on(stContext.event_types.CHAT_CHANGED, () => _editPollProcessed.clear());
+    // 원문 상태 복구 폴링 — 편집 감지는 MESSAGE_EDITED/저장 버튼 경로만 사용한다.
+    // msg.mes !== original_mes만으로 사용자 편집을 추측하면 ST의 스와이프·저장·줄바꿈
+    // 동기화까지 수정으로 오인해 반복 알림이 발생하므로 블라인드 편집 감지는 금지한다.
     setInterval(() => {
-        const mode = settings.afterEditMode || 'notify';
-        if (mode === 'keep') return;
         const pollChatRef = getLiveChat();
         if (!pollChatRef) return;
         
@@ -1260,56 +1260,6 @@ jQuery(async () => {
             if (repaired.changed) {
                 stContext.updateMessageBlock(idx, msg);
                 scheduleChatSave(`edit poll repair ${idx}`);
-                return;
-            }
-            
-            // 한국어 차단 (오염 방지)
-            const mesIsTarget = isClearlyLanguage(analyzeLanguage(msg.mes), getOutputTargetLanguage());
-            if (mesIsTarget) return;
-            
-            // 원문이 변경된 메시지 감지
-            if (msg.mes === msg.extra.original_mes) {
-                _editPollProcessed.delete(idx);
-                return;
-            }
-            
-            // 이미 처리한 메시지는 스킵
-            const fingerprint = msg.mes.substring(0, 100);
-            if (_editPollProcessed.get(idx) === fingerprint) return;
-            // 🚨 v1.1.11 (Q): 진행 중 번역이 있으면 이번 사이클은 양보 — 지문/원문을
-            // 소비하지 않고 물러나 3초 뒤 재시도. 기존엔 isAutoEvent=false로
-            // processMessage를 불러 N 게이트에 '수동'으로 위장 진입했고, 초대형
-            // 메시지의 진행 중 번역을 중단시키는 루프가 v1.1.10에서도 남아 있었음.
-            const inflightPoll = _activeTranslationAborts.get(idx);
-            if (inflightPoll && !inflightPoll.signal.aborted) return;
-            _editPollProcessed.set(idx, fingerprint);
-            
-            console.log(`[CAT] 🔍 폴링 감지: 원문 수정 #${idx} (mode: ${mode})`);
-            msg.extra.original_mes = msg.mes;
-            
-            if (mode === 'auto') {
-                delete msg.extra.display_text;
-                delete msg.extra.cat_literal;
-            delete msg.extra.cat_prev_display;
-                // 🚨 swipe_translations에서도 현재 swipe 삭제 (restoreSwipeTranslations 차단)
-                if (msg.extra.swipe_translations && msg.swipe_id !== undefined) {
-                    delete msg.extra.swipe_translations[msg.swipe_id];
-                }
-                delete msg.extra.cat_swipe_id;
-                $(`.mes[mesid="${idx}"]`).removeAttr('data-cat-translated');
-                stContext.updateMessageBlock(idx, msg);
-                catNotify(`${getThemeEmoji()} 원문 수정 감지 → 자동 재번역 중...`, "info");
-                // 🚨 캐시 우회: 새 원문에 대한 캐시 삭제 (이전 번역 재사용 방지)
-                const modelKey = getCacheModelKey(settings);
-                const targetLang = detectLanguageDirection(msg.mes, settings).targetLang;
-                deleteCached(msg.mes, targetLang, modelKey);
-                setTimeout(() => {
-                    if (getLiveChat() !== pollChatRef) return;
-                    processMessage(idx, false, null, false, true);
-                }, 300);
-            } else if (mode === 'notify') {
-                stContext.updateMessageBlock(idx, msg);
-                catNotify(`${getThemeEmoji()} 원문이 수정되었어요. 메시지의 번역 버튼으로 재번역해주세요.`, "info");
             }
         });
     }, 3000);
