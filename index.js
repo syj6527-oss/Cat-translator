@@ -442,10 +442,12 @@ async function processMessage(id, isInput = false, abortSignal = null, silent = 
             swipeText: getCurrentSwipeText(msg)
         };
 
-        if (!silent && !isRetranslation) {
-            const prefix = isAutoEvent ? '자동 번역' : '번역';
-            catNotify(`${getThemeEmoji()} ${prefix} 진행 중...`, "success");
-        }
+        const notifyCacheMiss = !silent && !isRetranslation
+            ? () => {
+                const prefix = isAutoEvent ? '자동 번역' : '번역';
+                catNotify(`${getThemeEmoji()} ${prefix} 진행 중...`, "success");
+            }
+            : null;
 
         // 🚨 beta.13: 팝업은 유저 버튼 탭에서만 — 벌크(외부 signal)/자동(isAutoEvent)/silent 경로는 기존대로 직행
         if (isRetranslation && !silent && !isAutoEvent && _ownAbortCtrl) {
@@ -519,7 +521,7 @@ async function processMessage(id, isInput = false, abortSignal = null, silent = 
             }, modelKey, prevDisplayForPopup);
             if (shown) { historyShown = true; return; }
         }
-        await doTranslateMessage(msgId, msg, textToTranslate, isInput, existingTranslation, abortSignal, silent, false, processChatRef);
+        await doTranslateMessage(msgId, msg, textToTranslate, isInput, existingTranslation, abortSignal, silent, false, processChatRef, notifyCacheMiss);
     } finally {
         clearTimeout(glowTimeout); if (!historyShown) stopGlow();
         // 🚨 beta.9: 중단 레지스트리 정리 (자체 생성분만)
@@ -527,7 +529,7 @@ async function processMessage(id, isInput = false, abortSignal = null, silent = 
     }
 }
 
-async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTranslation, abortSignal, silent = false, forceFresh = false, requestChatRef = getLiveChat()) {
+async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTranslation, abortSignal, silent = false, forceFresh = false, requestChatRef = getLiveChat(), onCacheMiss = null) {
     if (getLiveChat() !== requestChatRef) return;
     const requestMsg = requestChatRef?.[msgId] || msg;
     const requestedSwipeId = requestMsg.swipe_id;
@@ -568,7 +570,8 @@ async function doTranslateMessage(msgId, msg, textToTranslate, isInput, prevTran
         contextMessages: contextMsgs,
         abortSignal,
         silent,
-        forceFresh
+        forceFresh,
+        onCacheMiss
     });
 
     if (_translationApplyTokens.get(msgId) !== requestToken) {

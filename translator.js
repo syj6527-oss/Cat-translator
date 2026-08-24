@@ -657,7 +657,8 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
         _qualityRetry = 0,
         _structureFallback = false,
         _softCandidate = null,
-        retryReason = null
+        retryReason = null,
+        onCacheMiss = null
     } = options;
     if (!text || text.trim() === "") return null;
     if (_qualityRetry === 0) {
@@ -773,6 +774,12 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
             );
             await deleteCached(text, targetLang, modelKey);
         }
+    }
+
+    // 캐시 조회 전에 "번역 진행 중"을 띄우면 실제 API 호출이 없는 캐시 히트도
+    // 새 번역처럼 보인다. 최초 요청의 캐시 미스가 확정된 뒤에만 진행 상태를 알린다.
+    if (_qualityRetry === 0 && typeof onCacheMiss === 'function') {
+        try { onCacheMiss(); } catch (e) { console.warn('[CAT] 번역 진행 알림 표시 실패:', e); }
     }
 
     // 구조 토큰을 지키지 못하는 모델은 검증 실패 후 구버전 호환 경로로 한 번 재시도한다.

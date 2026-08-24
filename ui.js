@@ -945,6 +945,10 @@ function showDebugPopup() {
                 <button class="cat-debug-copy menu_button" style="flex:1;">📋 복사</button>
                 <button class="cat-debug-close menu_button" style="flex:1;">닫기</button>
             </div>
+            <div class="cat-debug-manual-copy" style="display:none; margin:8px 0;">
+                <div style="font-size:0.85em; margin-bottom:6px;">자동 복사가 차단됐어요. 아래 상자를 길게 눌러 전체 선택 후 복사해주세요.</div>
+                <textarea readonly style="box-sizing:border-box; width:100%; min-height:150px; resize:vertical; font-family:monospace; font-size:16px;"></textarea>
+            </div>
             <div style="text-align:center; font-size:0.8em; opacity:0.5;">💡 이 로그를 복사해서 보여주면 정확한 원인 파악 가능!</div>
             </div>
         </div>
@@ -987,25 +991,38 @@ function showDebugPopup() {
     overlay.on('cancel', (e) => { e.preventDefault(); closeOverlay(); });
     overlay.find('.cat-debug-close').on('click', closeOverlay);
     overlay.on('click', (e) => { if ($(e.target).hasClass('cat-debug-overlay')) closeOverlay(); });
-    overlay.find('.cat-debug-copy').on('click', () => {
+    overlay.find('.cat-debug-copy').on('click', async () => {
         const attemptLines = Array.isArray(log?.attempts) && log.attempts.length
             ? log.attempts.map((a, i) => `${i + 1}차 [${a.time}] (${a.path}) ${a.reason}${a.detail ? '\n    ' + String(a.detail).replace(/\n/g, '\n    ') : ''}`).join('\n')
             : null;
         const copyText = `[${debugProduct} 디버그 로그]\n버전: ${CAT_BETA_VERSION}\n${sessionStatsLine}\n${resultStatsLine}\n시각: ${ts}\n모드: ${mode}\n모델: ${model}\n에러: ${error}\n병기 조립: ${assembly}\n사전: ${glossary}\n복구: ${recovery}\n참고: ${notes}${log?.validationDetail ? '\n\n--- 검증 상세 ---\n' + log.validationDetail : ''}${attemptLines ? '\n\n--- 시도 이력 ---\n' + attemptLines : ''}\n\n--- 프롬프트 ---\n${log?.prompt || '없음'}\n\n--- LLM 응답 ---\n${log?.rawResponse || '없음'}\n\n--- 후처리 결과 ---\n${log?.cleaned || '없음'}${thought ? '\n\n--- 사고 과정 ---\n' + thought : ''}`;
-        catCopyToClipboard(copyText).then(ok => ok
-            ? catNotify('📋 디버그 로그 복사 완료!', 'success')
-            : catNotify('복사 실패 — 로그 창의 텍스트를 길게 눌러 수동 복사해주세요', 'warning'));
+        const ok = await catCopyToClipboard(copyText);
+        if (ok) {
+            overlay.find('.cat-debug-manual-copy').hide();
+            catNotify('📋 디버그 로그 복사 완료!', 'success');
+            return;
+        }
+        const manual = overlay.find('.cat-debug-manual-copy');
+        const textarea = manual.find('textarea');
+        textarea.val(copyText);
+        manual.show();
+        requestAnimationFrame(() => {
+            const element = textarea[0];
+            element?.focus({ preventScroll: true });
+            element?.select();
+            element?.setSelectionRange(0, element.value.length);
+            element?.scrollIntoView({ block: 'nearest' });
+        });
+        catNotify('자동 복사가 차단되어 수동 복사 상자를 열었어요.', 'warning');
     });
 }
 
-// 🚨 v1.1.13 (S): 비보안 컨텍스트(HTTP LAN 접속) 대응 클립보드 헬퍼.
-// navigator.clipboard는 HTTPS/localhost에서만 존재 — 폰에서 http://192.168.x.x로
-// 접속하면 undefined라 기존 단독 호출이 알림도 없이 즉사했음 ("로그복사도 안 됨"
-// 제보의 원인). 모바일 http 사용자들이 로그를 '안' 보낸 게 아니라 '못' 보냈던 것.
-// 1차: 표준 API → 실패/부재 시 2차: 임시 textarea + execCommand 폴백.
-async function catCopyToClipboard(text) {
+// 비보안 HTTP(Tailscale/LAN)는 Clipboard API가 보여도 권한 거절 뒤 사용자 활성화가
+// 만료될 수 있다. 이 경우 처음부터 동기식 execCommand를 사용하고, 실패하면 호출부가
+// 전체 로그가 든 수동 복사 상자를 노출한다.
+export async function catCopyToClipboard(text) {
     try {
-        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        if (window.isSecureContext && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
             await navigator.clipboard.writeText(text);
             return true;
         }
@@ -1013,16 +1030,22 @@ async function catCopyToClipboard(text) {
     try {
         const ta = document.createElement('textarea');
         ta.value = text;
-        ta.setAttribute('readonly', '');
+        ta.setAttribute('aria-hidden', 'true');
         ta.style.position = 'fixed';
-        ta.style.left = '-9999px';
+        ta.style.left = '0';
         ta.style.top = '0';
+        ta.style.width = '2px';
+        ta.style.height = '2px';
+        ta.style.padding = '0';
+        ta.style.border = '0';
+        ta.style.opacity = '0.01';
+        ta.style.fontSize = '16px';
         document.body.appendChild(ta);
-        ta.focus();
+        ta.focus({ preventScroll: true });
         ta.select();
         ta.setSelectionRange(0, ta.value.length); // iOS 대응
-        const ok = document.execCommand('copy');
-        document.body.removeChild(ta);
+        const ok = typeof document.execCommand === 'function' && document.execCommand('copy');
+        ta.remove();
         return ok;
     } catch (_) {
         return false;
