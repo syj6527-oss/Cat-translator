@@ -93,7 +93,7 @@ export function catNotifyProgress(message, onAbort) {
 }
 
 // 🚨 정밀 클리너: AI가 추가한 래핑만 제거, 원본 코드블록/YAML 보존!
-export const CAT_BETA_VERSION = '1.2.2';
+export const CAT_BETA_VERSION = '1.2.4';
 export const CAT_BUILD_CHANNEL = 'release';
 
 export function cleanResult(text, originalText = null, structureProtection = null) {
@@ -506,21 +506,93 @@ function createProtectedMarkerPattern(marker, flags = '') {
     );
 }
 
+// 일부 모델은 @@CATFMT_0008@@를 @CATFMT_0008@, @0008@, 심하면 @8@로
+// 줄여 출력한다. 번호만 남은 별칭은 일반 본문의 @숫자@와 충돌할 수 있으므로
+// 현재 보호기에 실제로 존재하는 번호만 후보로 만들고, 원문에 같은 표기가 있으면
+// 그 별칭은 복구하지 않는다.
+function getProtectedMarkerAliases(marker) {
+    const match = String(marker || '').match(/^@@.+_([0-9]{4})@@$/);
+    if (!match) return [];
+    const padded = match[1];
+    const compact = String(Number.parseInt(padded, 10));
+    return [marker.slice(1, -1), ...new Set([padded, compact])].map(value =>
+        value.startsWith('@') ? value : `@${value}@`
+    );
+}
+
+function protectedTokenLeakPattern(flags = 'g') {
+    return new RegExp(
+        '@@[A-Za-z][A-Za-z0-9_]*_\\d{4}@@' +
+        '|@[A-Za-z][A-Za-z0-9_]*_\\d{4}@' +
+        '|@@\\d{1,4}@@' +
+        '|@\\d{1,4}@',
+        flags
+    );
+}
+
+function countProtectedLikeSourceLiterals(protection) {
+    const counts = new Map();
+    for (const match of String(protection?.source || '').matchAll(protectedTokenLeakPattern('gi'))) {
+        const key = match[0].toLowerCase();
+        counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    return counts;
+}
+
+function findUnexpectedProtectedTokenAliases(text, protection) {
+    if (!protection?.hasStructure) return [];
+    const allowedSource = countProtectedLikeSourceLiterals(protection);
+    const expected = new Set((protection.expectedMarkers || []).map(marker => marker.toLowerCase()));
+    const unexpected = [];
+    for (const match of String(text || '').matchAll(protectedTokenLeakPattern('gi'))) {
+        const key = match[0].toLowerCase();
+        if (expected.has(key)) continue;
+        const remaining = allowedSource.get(key) || 0;
+        if (remaining > 0) {
+            allowedSource.set(key, remaining - 1);
+        } else {
+            unexpected.push(match[0]);
+        }
+    }
+    return unexpected;
+}
+
 function hasProtectedMarkerVariant(text, protection) {
     if (!protection?.expectedMarkers?.length) return false;
     const source = String(text || '');
-    return protection.expectedMarkers.some(marker =>
-        createProtectedMarkerPattern(marker, 'i').test(source)
-    );
+    return protection.expectedMarkers.some(marker => {
+        if (createProtectedMarkerPattern(marker, 'i').test(source)) return true;
+        return getProtectedMarkerAliases(marker).some(alias =>
+            !String(protection.source || '').includes(alias) && source.includes(alias)
+        );
+    });
 }
 
 function normalizeProtectedStructureResponse(text, protection) {
     if (!protection?.hasStructure) return String(text || '');
     
     let normalized = String(text || '');
+    // 정확한 정식 마커는 먼저 사설 슬롯으로 치워 둔다. @CATFMT_0000@가
+    // @@CATFMT_0000@@의 내부 부분 문자열이므로 바로 치환하면 정상 마커까지
+    // 세 겹 @로 부풀 수 있고, 연속 축약 토큰(@1@@2@)도 경계 정규식으로는
+    // 서로의 @를 먹을 수 있다. 슬롯 치환은 두 경우를 모두 결정론적으로 피한다.
+    const markerSlots = new Map();
+    protection.expectedMarkers.forEach((marker, index) => {
+        const slot = `\uE000CATFMT${index}\uE001`;
+        markerSlots.set(marker, slot);
+        normalized = normalized.split(marker).join(slot);
+    });
     for (const marker of protection.expectedMarkers) {
-        normalized = normalized.replace(createProtectedMarkerPattern(marker, 'gi'), marker);
-        
+        const slot = markerSlots.get(marker);
+        for (const alias of getProtectedMarkerAliases(marker)) {
+            if (!String(protection.source || '').includes(alias)) {
+                normalized = normalized.split(alias).join(slot);
+            }
+        }
+        normalized = normalized.replace(createProtectedMarkerPattern(marker, 'gi'), slot);
+    }
+    for (const marker of protection.expectedMarkers) {
+        normalized = normalized.split(markerSlots.get(marker)).join(marker);
         const escapedMarker = escapeRegExp(marker);
         const wrappers = [
             new RegExp('`{1,3}[\\t ]*' + escapedMarker + '[\\t ]*`{1,3}', 'g'),
@@ -561,6 +633,34 @@ function normalizeProtectedStructureResponse(text, protection) {
     }
     
     return normalized;
+}
+
+// 최종 fail-open 표시에서도 변형된 내부 토큰이 사용자에게 노출되지 않도록,
+// 현재 요청에서 알고 있는 토큰 별칭만 원래 HTML/CSS/펜스/매크로 값으로 복원한다.
+export function restoreProtectedTokenLeaks(text, protection) {
+    if (!protection?.hasStructure) return String(text || '');
+    let restored = normalizeProtectedStructureResponse(text, protection);
+    for (const token of protection.tokens || []) {
+        restored = restored.split(token.marker).join(token.value);
+    }
+    return restored;
+}
+
+export function sanitizeProtectedTokenLeaks(text, protection) {
+    const restored = restoreProtectedTokenLeaks(text, protection);
+    if (!protection?.hasStructure) {
+        return restored.replace(/@@[A-Za-z][A-Za-z0-9_]*_\d{4}@@/g, '');
+    }
+    const allowedSource = countProtectedLikeSourceLiterals(protection);
+    return restored.replace(protectedTokenLeakPattern('gi'), (token) => {
+        const key = token.toLowerCase();
+        const remaining = allowedSource.get(key) || 0;
+        if (remaining > 0) {
+            allowedSource.set(key, remaining - 1);
+            return token;
+        }
+        return '';
+    });
 }
 
 function collapseBilingualMacroCopiesInQuote(content) {
@@ -644,6 +744,15 @@ export function restoreTranslationStructure(text, protection, options = {}) {
     
     const rawOutput = String(text || '');
     let output = normalizeProtectedStructureResponse(rawOutput, protection);
+    const unexpectedAliases = findUnexpectedProtectedTokenAliases(output, protection);
+    if (unexpectedAliases.length > 0) {
+        return {
+            ok: false,
+            text: null,
+            code: 'VALIDATION_TOKEN_ALIAS_UNKNOWN',
+            reason: `알 수 없는 구조 토큰 변형: ${[...new Set(unexpectedAliases)].join(', ')}`
+        };
+    }
     const tokenByMarker = new Map((protection.tokens || []).map(token => [token.marker, token]));
     // 🚨 v1.1.4-beta.6 (J): 인접 이중 마커 삼킴 자동 구제.
     // 들여쓰기 리스트/상태창을 보호하면 @@CATFMT_0018@@@@CATFMT_0019@@처럼
@@ -858,6 +967,14 @@ export function restoreTranslationTokens(text, protection) {
     }
     
     let restored = normalizeProtectedStructureResponse(text, protection);
+    const unexpectedAliases = findUnexpectedProtectedTokenAliases(restored, protection);
+    if (unexpectedAliases.length > 0) {
+        return {
+            ok: false,
+            text: null,
+            reason: `직역 파트에 알 수 없는 구조 토큰 변형이 남음: ${[...new Set(unexpectedAliases)].join(', ')}`
+        };
+    }
     for (const token of protection.tokens) {
         restored = restored.split(token.marker).join(token.value);
     }

@@ -2,7 +2,7 @@
 // 🐱 Translator v1.1.0 - translator.js
 // ============================================================
 import { secret_state, SECRET_KEYS } from '../../../../scripts/secrets.js';
-import { cleanResult, catNotify, detectLanguageDirection, stripMetaForDetection, getThemeEmoji, getCompletionEmoji, getCacheModelKey, applyPreReplaceWithCount, getMatchedDictionaryLines, analyzeSpeechPatterns, splitLiteralAppendix, revealSpecialChars, auditDividerLines, protectTranslationStructure, restoreTranslationStructure, restoreTranslationTokens, validateTranslationStructure, normalizeBilingualMacroCopiesForValidation, isKoreanGrammarMacro, analyzeLanguage, isClearlyLanguage } from './utils.js';
+import { cleanResult, catNotify, detectLanguageDirection, stripMetaForDetection, getThemeEmoji, getCompletionEmoji, getCacheModelKey, applyPreReplaceWithCount, getMatchedDictionaryLines, analyzeSpeechPatterns, splitLiteralAppendix, revealSpecialChars, auditDividerLines, protectTranslationStructure, restoreTranslationStructure, restoreTranslationTokens, sanitizeProtectedTokenLeaks, validateTranslationStructure, normalizeBilingualMacroCopiesForValidation, isKoreanGrammarMacro, analyzeLanguage, isClearlyLanguage } from './utils.js';
 import { deleteCached, getCached, setCached } from './cache.js';
 
 const LEGACY_SYSTEM_SHIELD = `[ABSOLUTE DIRECTIVE - VIOLATION = FAILURE]
@@ -987,7 +987,11 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
             (settings.dialogueBilingual || 'off') === 'ko-en' && targetLang === 'Korean';
         if (salvageText && isKoEnBilingualRequest) {
             const partialRepair = repairBilingualPartially(sourceText, salvageText);
-            const partialText = makeDisplaySafeSalvage(partialRepair.text || salvageText, reason);
+            const partialText = makeDisplaySafeSalvage(
+                partialRepair.text || salvageText,
+                reason,
+                structureProtection
+            );
             if (partialText && partialText.trim() && /[가-힣]/.test(partialText)) {
                 const completion = classifyBilingualCompletion(
                     partialRepair.repaired,
@@ -1015,7 +1019,7 @@ export async function fetchTranslation(text, settings, stContext, options = {}) 
         // 두 번 모두 일부 구조가 어긋났더라도 번역 본문이 존재하면 안전 표시본으로
         // 정리해 출고한다. 사용자가 원문만 보게 되는 결말은 빈 응답일 때만 허용한다.
         if (salvageText && salvageText.trim() && /[가-힣]/.test(salvageText)) {
-            const safeSalvage = makeDisplaySafeSalvage(salvageText, reason);
+            const safeSalvage = makeDisplaySafeSalvage(salvageText, reason, structureProtection);
             if (safeSalvage.trim()) {
                 console.warn(`[CAT] 🛟 검증 일부 실패 허용 → 번역 우선 표시: ${reason}`);
                 recordSoftNote(`검증 일부 실패 허용 — 번역 우선 표시 (${reason})`);
@@ -2223,10 +2227,8 @@ export function validateKoEnBilingualDialogue(original, output) {
     return { ok: true, reason: null };
 }
 
-export function makeDisplaySafeSalvage(text, reason = '') {
-    let safe = String(text || '')
-        .replace(/@@[A-Za-z0-9_]+_\d{4}@@/g, '')
-        .trim();
+export function makeDisplaySafeSalvage(text, reason = '', structureProtection = null) {
+    let safe = sanitizeProtectedTokenLeaks(String(text || ''), structureProtection).trim();
     // 태그 구조가 끝내 맞지 않으면 서식만 포기하고 읽을 수 있는 본문은 살린다.
     if (/태그|구조 토큰|구조 개수 불일치/.test(String(reason))) {
         safe = safe.replace(/<\/?[a-zA-Z][^>]*>/g, '');
