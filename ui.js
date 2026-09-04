@@ -1,9 +1,9 @@
 // ============================================================
 // 🐱 Translator v1.1.0 - ui.js
 // ============================================================
-import { CAT_BETA_VERSION, CAT_BUILD_CHANNEL, catNotify, catNotifyProgress, getThemeEmoji, getCompletionEmoji, getModelTheme, setTextareaValue, resolveInputTranslationDirection, resolveInputUserPrompt } from './utils.js';
+import { CAT_BETA_VERSION, CAT_BUILD_CHANNEL, catNotify, catNotifyProgress, getThemeEmoji, getCompletionEmoji, getModelTheme, setTextareaValue, resolveInputTranslationDirection, resolveInputUserPrompt, normalizeInternalInputLanguage, shouldKeepInternalInputEnter, shouldRestoreInternalInputDraft, getInternalInputState, applyInternalInputState } from './utils.js';
 import { getStats, clearAllCache, exportSettings, importSettings, getHistory, togglePin, deleteHistoryItem } from './cache.js';
-import { fetchTranslation, gatherContextMessages, SYSTEM_SHIELD, STYLE_PRESETS, getLastDebugLog, getTranslationStats } from './translator.js';
+import { fetchTranslation, gatherContextMessages, gatherInternalInputContextMessages, SYSTEM_SHIELD, STYLE_PRESETS, getLastDebugLog, getTranslationStats } from './translator.js';
 
 let bulkAbortController = null;
 let isTranslatingInput = false;
@@ -12,6 +12,8 @@ let _settingsRef = null;  // 🚨 collectSettings에서 promptPresets/charPreset
 let _suppressAutoSave = false;  // 🚨 프리셋 로드 중 autoSave/스타일핸들러 차단
 let _autoSaveTimer = null;  // 🚨 모듈 스코프로 이동 (CHAT_CHANGED에서 접근 필요)
 const _translatedEditSessions = new Map();
+let _internalInputSendBusy = false;
+let _internalInputSendBypass = false;
 
 function getTranslatedEditKey(msgId) {
     const id = Number.parseInt(msgId, 10);
@@ -111,7 +113,29 @@ export function clearPendingAutoSave() { clearTimeout(_autoSaveTimer); _autoSave
 
 export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
     _settingsRef = settings;  // 🚨 collectSettings에서 접근용
-    if ($('#cat-trans-container').length) return;
+    const currentPanel = $('#cat-trans-container');
+    if (currentPanel.length) {
+        const currentVersion = String(currentPanel.attr('data-cat-version') || '');
+        const controlsReady = currentPanel.find('#ct-internal-input, #ct-internal-input-lang').length === 2;
+        if (currentVersion === CAT_BETA_VERSION && controlsReady) return true;
+        currentPanel.remove();
+    }
+
+    // 정식판과 실험실판은 같은 설정/버튼 ID를 사용하므로 동시에 켜면 안전하지 않다.
+    // 로드 순서와 무관하게 먼저 활성화된 실험실판이 있으면 정식판이 양보한다.
+    if ($('#cat-trans-lab-container').length) {
+        if (!$('#cat-trans-release-conflict').length) {
+            $('#extensions_settings').append(`
+                <div id="cat-trans-release-conflict" class="inline-drawer" data-cat-version="${CAT_BETA_VERSION}" style="padding:10px; border:1px solid #d88;">
+                    <b>🐱 Cat Translator ${CAT_BETA_VERSION}</b><br>
+                    <span style="font-size:0.88em;">실험실판이 함께 활성화되어 정식판을 중지했습니다. 실험실판을 끈 뒤 새로고침하세요.</span>
+                </div>`);
+        }
+        catNotify('🐱 실험실판을 끈 뒤 새로고침해야 정식판 설정이 표시됩니다.', 'warning');
+        console.warn(`[CAT ${CAT_BETA_VERSION}] 실험실판 설정 패널 충돌 감지 → 정식판 설정 초기화 중지`);
+        return false;
+    }
+    $('#cat-trans-release-conflict').remove();
 
     let profileOptions = '<option value="">⚡ 직접 연결 모드</option>';
     (stContext.extensionSettings?.connectionManager?.profiles || []).forEach(p => { profileOptions += `<option value="${p.id}">${p.name}</option>`; });
@@ -124,9 +148,9 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
     const dictIcon = (settings.dictionary && settings.dictionary.trim()) ? '📬' : '📭';
 
     const html = `
-    <div id="cat-trans-container" class="inline-drawer">
+    <div id="cat-trans-container" class="inline-drawer" data-cat-version="${CAT_BETA_VERSION}">
         <div id="cat-drawer-header" class="inline-drawer-header interactable" tabindex="0">
-            <div class="inline-drawer-title"><span class="cat-beta-brand-emoji">🐱</span><span>Cat Translator</span></div>
+            <div class="inline-drawer-title"><span class="cat-beta-brand-emoji">🐱</span><span>Cat Translator <small style="opacity:0.6;">${CAT_BETA_VERSION}</small></span></div>
             <i id="cat-drawer-toggle" class="inline-drawer-toggle fa-fw fa-solid fa-circle-chevron-down inline-drawer-icon down interactable"></i>
         </div>
         <div id="cat-drawer-content" class="inline-drawer-content" style="display:none; padding:10px;">
@@ -156,6 +180,13 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
                 <div class="cat-setting-row" style="flex:1;"><label>자동 번역</label><select id="ct-auto-mode" class="text_pole"><option value="none">꺼짐</option><option value="input">입력만</option><option value="output">출력만</option><option value="both">둘 다</option></select></div>
                 <div class="cat-setting-row" style="flex:1;"><label>양방향 번역</label><select id="ct-bidirectional" class="text_pole"><option value="off">꺼짐</option><option value="ko-en">한↔영</option><option value="ko-ja">한↔일</option><option value="ko-zh">한↔중</option></select></div>
             </div>
+            <div class="cat-setting-row"><label>비제미나이 고속 번역</label><select id="ct-non-gemini-fast" class="text_pole"><option value="off">꺼짐 (기존 번역 경로)</option><option value="on">켜짐 (속도 우선·문맥 축약)</option></select></div>
+            <div style="font-size:0.8em; opacity:0.72; margin:-2px 0 8px; line-height:1.45;">⚠️ 속도 우선 기능입니다. 이전 메시지 전문·캐릭터 배경을 보내지 않고 모델 자체의 문맥 판단에 맡기므로 대명사·호칭·말투 품질이 아쉬울 수 있습니다. 구조·목표 언어·심각한 누락만 최소 방어합니다.</div>
+            <div style="display:flex; gap:8px;">
+                <div class="cat-setting-row" style="flex:1;"><label>입력 내부 번역</label><select id="ct-internal-input" class="text_pole"><option value="off">꺼짐</option><option value="on">켜짐</option></select></div>
+                <div class="cat-setting-row" style="flex:1;"><label>AI 전달 언어</label><select id="ct-internal-input-lang" class="text_pole"><option value="English">English</option><option value="Japanese">Japanese</option><option value="Chinese">Chinese</option><option value="German">German</option><option value="Russian">Russian</option><option value="French">French</option></select></div>
+            </div>
+            <div style="font-size:0.8em; opacity:0.65; margin:-2px 0 8px; line-height:1.45;">💡 켜면 작성한 한국어는 화면에 유지되고, AI에는 선택한 언어로 번역되어 전달됩니다. ✏️는 한국어 원문, 🐟/🍖는 실제 전달문을 수정합니다.</div>
             <div style="display:flex; gap:8px;">
                 <div class="cat-setting-row" style="flex:1;"><label>목표 언어 (AI 기본)</label><select id="ct-lang" class="text_pole">${langOptions}</select></div>
                 <div class="cat-setting-row" style="flex:1;"><label>대사 병기</label><select id="ct-dialogue-bilingual" class="text_pole"><option value="off">꺼짐</option><option value="ko-en">한영 병기</option><option value="ko-ja">한일 병기</option><option value="ko-zh">한중 병기</option></select></div>
@@ -262,8 +293,25 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
     };
     
     // 모든 설정 필드에 자동 저장 연결
-    $('#ct-profile, #ct-auto-mode, #ct-bidirectional, #ct-dialogue-bilingual, #ct-literal-bilingual, #ct-lang, #ct-style, #ct-temperature, #ct-max-tokens, #ct-context-range, #ct-retranslate-strength, #ct-after-edit, #ct-preview-cleanup').on('change', autoSave);
+    $('#ct-profile, #ct-auto-mode, #ct-non-gemini-fast, #ct-bidirectional, #ct-internal-input, #ct-internal-input-lang, #ct-dialogue-bilingual, #ct-literal-bilingual, #ct-lang, #ct-style, #ct-temperature, #ct-max-tokens, #ct-context-range, #ct-retranslate-strength, #ct-after-edit, #ct-preview-cleanup').on('change', autoSave);
     $('#ct-key, #ct-model-custom, #ct-user-prompt, #ct-input-user-prompt, #ct-dictionary').on('input', autoSave);
+
+    $('#ct-non-gemini-fast').on('change', function () {
+        if ($(this).val() !== 'on') return;
+        const accepted = confirm(
+            '비제미나이 고속 번역은 속도를 위해 이전 메시지 전문과 캐릭터 배경을 API에 보내지 않습니다.\n\n' +
+            '문맥 파악·대명사·호칭·말투 품질은 모델 자체 능력에 맡기며, 번역기는 구조·목표 언어·심각한 누락만 최소 검사합니다.\n\n' +
+            '품질보다 속도를 우선하는 설정입니다. 켤까요?'
+        );
+        if (!accepted) {
+            $(this).val('off');
+            settings.nonGeminiFastMode = 'off';
+            catNotify('비제미나이 고속 번역을 켜지 않았습니다.', 'info');
+            return;
+        }
+        settings.nonGeminiFastMode = 'on';
+        catNotify('⚠️ 비제미나이 고속 번역: 속도 우선·문맥 품질 일부 포기', 'warning');
+    });
     
     $('#ct-model').val(settings.directModel).on('change', function () {
         const val = $(this).val();
@@ -302,7 +350,10 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
         }
     });
     $('#ct-style').val(settings.style || 'normal').on('change', function () { if (_suppressAutoSave) return; const preset = STYLE_PRESETS[$(this).val()]; if (preset) $('#ct-temperature').val(preset.temperature); });
-    $('#ct-auto-mode').val(settings.autoMode); $('#ct-bidirectional').val(settings.bidirectional || 'off'); $('#ct-dialogue-bilingual').val(settings.dialogueBilingual || 'off'); $('#ct-literal-bilingual').val(settings.literalBilingual || 'off'); $('#ct-lang').val(settings.targetLang); $('#ct-temperature').val(settings.temperature || 0.3);
+    $('#ct-auto-mode').val(settings.autoMode); $('#ct-non-gemini-fast').val(settings.nonGeminiFastMode || 'off'); $('#ct-bidirectional').val(settings.bidirectional || 'off'); $('#ct-internal-input').val(settings.internalInputTranslation || 'off'); $('#ct-internal-input-lang').val(normalizeInternalInputLanguage(settings.internalInputLanguage)); $('#ct-dialogue-bilingual').val(settings.dialogueBilingual || 'off'); $('#ct-literal-bilingual').val(settings.literalBilingual || 'off'); $('#ct-lang').val(settings.targetLang); $('#ct-temperature').val(settings.temperature || 0.3);
+    const syncInternalInputLanguageState = () => $('#ct-internal-input-lang').prop('disabled', ($('#ct-internal-input').val() || 'off') !== 'on');
+    $('#ct-internal-input').on('change', syncInternalInputLanguageState);
+    syncInternalInputLanguageState();
     
     // 대사 병기 변경 시 알림
     $('#ct-dialogue-bilingual').on('change', function() {
@@ -496,7 +547,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
         if (!confirm('모든 설정을 초기값으로 되돌리시겠습니까?')) return;
         $('#ct-profile').val(''); $('#ct-key').val('');
         $('#ct-model').val('gemini-2.5-flash'); $('#ct-model-custom').val('').hide();
-        $('#ct-auto-mode').val('none'); $('#ct-bidirectional').val('off'); $('#ct-dialogue-bilingual').val('off'); $('#ct-literal-bilingual').val('off'); $('#ct-icon-visibility').val('all'); $('#ct-lang').val('Korean'); $('#ct-style').val('normal'); $('#ct-retranslate-strength').val('normal'); $('#ct-after-edit').val('notify'); $('#ct-preview-cleanup').val('off');
+        $('#ct-auto-mode').val('none'); $('#ct-non-gemini-fast').val('off'); $('#ct-bidirectional').val('off'); $('#ct-internal-input').val('off'); $('#ct-internal-input-lang').val('English').prop('disabled', true); $('#ct-dialogue-bilingual').val('off'); $('#ct-literal-bilingual').val('off'); $('#ct-icon-visibility').val('all'); $('#ct-lang').val('Korean'); $('#ct-style').val('normal'); $('#ct-retranslate-strength').val('normal'); $('#ct-after-edit').val('notify'); $('#ct-preview-cleanup').val('off');
         $('#ct-temperature').val(0.3); $('#ct-max-tokens').val(8192); $('#ct-context-range').val(1);
         $('#ct-user-prompt').val(''); $('#ct-dictionary').val(''); $('#ct-dict-reset').text('📭');
         settings.promptPresets = {}; settings.charPresetMap = {}; $('#ct-prompt-preset').val('').find('option:not(:first)').remove();
@@ -516,6 +567,7 @@ export function setupSettingsPanel(settings, stContext, saveSettingsFn) {
     } else {
         applyTheme('cat');
     }
+    return true;
 }
 
 export function collectSettings() {
@@ -548,6 +600,9 @@ export function collectSettings() {
         vertexRegion: _settingsRef?.vertexRegion || 'global',
         directModel: modelVal === 'custom' ? ($('#ct-model-custom').val() || _settingsRef?.directModel || 'gemini-2.5-flash') : (modelVal || _settingsRef?.directModel || 'gemini-2.5-flash'),
         customModelName: $('#ct-model-custom').val() || _settingsRef?.customModelName || '', autoMode: $('#ct-auto-mode').val() || _settingsRef?.autoMode || 'none',
+        nonGeminiFastMode: $('#ct-non-gemini-fast').val() || _settingsRef?.nonGeminiFastMode || 'off',
+        internalInputTranslation: $('#ct-internal-input').val() || _settingsRef?.internalInputTranslation || 'off',
+        internalInputLanguage: normalizeInternalInputLanguage($('#ct-internal-input-lang').val() || _settingsRef?.internalInputLanguage),
         bidirectional: $('#ct-bidirectional').val() || _settingsRef?.bidirectional || 'off', dialogueBilingual: $('#ct-dialogue-bilingual').val() || _settingsRef?.dialogueBilingual || 'off', literalBilingual: $('#ct-literal-bilingual').val() || _settingsRef?.literalBilingual || 'off', iconVisibility: $('#ct-icon-visibility').val() || _settingsRef?.iconVisibility || 'all',
         targetLang: $('#ct-lang').val() || _settingsRef?.targetLang || 'Korean', style: $('#ct-style').val() || _settingsRef?.style || 'normal',
         temperature: parseFloat($('#ct-temperature').val()) || _settingsRef?.temperature || 0.3, maxTokens: parseInt($('#ct-max-tokens').val()) || _settingsRef?.maxTokens || 8192,
@@ -577,7 +632,165 @@ export function applyTheme(theme, notify = false) {
     _lastAppliedTheme = theme;
 }
 
+function restoreInternalInputSource(sendArea, sourceText) {
+    if (!sendArea) return;
+    const draft = String(sendArea.value || '').trim();
+    if (!draft) {
+        setTextareaValue(sendArea, sourceText);
+    } else if (draft !== sourceText) {
+        setTextareaValue(sendArea, `${sourceText}\n\n${sendArea.value}`);
+    }
+}
+
+function setupInternalInputSendInterceptor(settings, stContext) {
+    if (window.__catInternalInputInterceptorInstalled) return;
+    window.__catInternalInputInterceptorInstalled = true;
+
+    const interceptSend = async event => {
+        if (_internalInputSendBypass || (settings.internalInputTranslation || 'off') !== 'on') return;
+        if (shouldKeepInternalInputEnter(event, true)) {
+            // 기본 동작(IME 확정·textarea 줄바꿈)은 살리고 ST 전송 리스너만 차단한다.
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+            return;
+        }
+        const isSendClick = event.type === 'click' && event.target?.closest?.('#send_but');
+        if (!isSendClick) return;
+
+        const sendArea = document.getElementById('send_textarea');
+        const sourceText = String(sendArea?.value || '').trim();
+        if (!sendArea || !sourceText || sourceText.startsWith('/')) return;
+
+        const targetLang = normalizeInternalInputLanguage(settings.internalInputLanguage);
+        const direction = resolveInputTranslationDirection(sourceText, {
+            ...settings,
+            targetLang,
+            bidirectional: 'off',
+            dialogueBilingual: 'off'
+        });
+        if (!direction.shouldTranslate) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        if (_internalInputSendBusy) {
+            catNotify(`${getThemeEmoji()} 내부 번역이 끝날 때까지 잠깐만요.`, 'info');
+            return;
+        }
+
+        _internalInputSendBusy = true;
+        const requestChatRef = SillyTavern?.getContext?.()?.chat || stContext.chat;
+        const transIcon = $('#cat-input-btn .cat-emoji-icon');
+        transIcon.addClass('cat-glow-anim');
+        pushInputHistory(sourceText);
+        catNotify(`${getThemeEmoji()} ${targetLang} 내부 번역 중...`, 'success');
+
+        try {
+            if (document.activeElement === sendArea) {
+                sendArea.blur();
+                await new Promise(resolve => setTimeout(resolve, 20));
+            }
+
+            const liveContext = SillyTavern?.getContext?.() || stContext;
+            const contextMsgs = gatherInternalInputContextMessages(liveContext.chat.length, liveContext);
+            const inputSettings = {
+                ...settings,
+                dialogueBilingual: 'off',
+                literalBilingual: 'off',
+                targetLang,
+                userPrompt: resolveInputUserPrompt(settings)
+            };
+            const result = await fetchTranslation(sourceText, inputSettings, liveContext, {
+                forceLang: targetLang,
+                contextMessages: contextMsgs,
+                silent: true,
+                internalInputFast: true
+            });
+
+            const latestContext = SillyTavern?.getContext?.() || stContext;
+            if (latestContext.chat !== requestChatRef) {
+                restoreInternalInputSource(sendArea, sourceText);
+                catNotify(`${getThemeEmoji()} 채팅이 바뀌어서 이전 번역을 보내지 않았어요.`, 'warning');
+                return;
+            }
+            if (!result?.text?.trim() || result.text.trim() === sourceText) {
+                const debug = getLastDebugLog();
+                const failureDetail = debug?.error || debug?.quality?.issues?.join('; ') || '입력창에 원문 복구됨';
+                restoreInternalInputSource(sendArea, sourceText);
+                const shortFailure = String(failureDetail).replace(/\s+/g, ' ').slice(0, 90);
+                catNotify(`${getThemeEmoji()} 내부 번역 실패: ${shortFailure}`, 'warning');
+                return;
+            }
+
+            const translatedText = result.text.trim();
+            const sourceNewlines = (sourceText.match(/\n/g) || []).length;
+            const translatedNewlines = (translatedText.match(/\n/g) || []).length;
+            const hijacked = translatedText.length > Math.max(300, sourceText.length * 4) ||
+                (translatedText.length > sourceText.length * 2.5 && translatedNewlines > sourceNewlines + 3);
+            if (hijacked) {
+                console.warn(`[CAT] 🛡️ 내부 입력 하이재킹 차단: ${sourceText.length}자 → ${translatedText.length}자`);
+                restoreInternalInputSource(sendArea, sourceText);
+                catNotify(`${getThemeEmoji()} 번역 모델이 RP를 이어 쓴 것 같아서 전송을 막았어요.`, 'warning');
+                return;
+            }
+            const currentDraft = String(sendArea.value || '');
+            const nextDraft = currentDraft.trim() === sourceText ? '' : currentDraft;
+            window.__catPendingInternalInput = {
+                version: 1,
+                sourceText,
+                translatedText,
+                targetLang,
+                chatRef: requestChatRef,
+                createdAt: Date.now(),
+                nextDraft
+            };
+            const pendingCreatedAt = window.__catPendingInternalInput.createdAt;
+            setTextareaValue(sendArea, translatedText);
+
+            const sendButton = document.getElementById('send_but');
+            if (!sendButton) {
+                window.__catPendingInternalInput = null;
+                setTextareaValue(sendArea, nextDraft || sourceText);
+                catNotify(`${getThemeEmoji()} 전송 버튼을 찾지 못해서 전송을 중단했어요.`, 'warning');
+                return;
+            }
+
+            _internalInputSendBypass = true;
+            sendButton.click();
+            queueMicrotask(() => { _internalInputSendBypass = false; });
+            // ST가 전송문을 채팅 배열에 붙이기 전에 입력창을 0ms로 되돌리면,
+            // API는 영문을 받았는데 사용자 메시지만 사라지는 레이스가 발생한다.
+            // 실제 USER_MESSAGE_RENDERED/GENERATION_STARTED 연결 뒤에 draft를 복구한다.
+            [50, 250, 1000, 3000, 8000].forEach(delay => setTimeout(() => {
+                window.__catReconcilePendingInternalInput?.();
+            }, delay));
+            catNotify(`${getCompletionEmoji()} ${targetLang}로 내부 전달했어요. 화면에는 한국어를 유지합니다.`, 'success');
+
+            setTimeout(() => {
+                const pending = window.__catPendingInternalInput;
+                if (!pending || pending.createdAt !== pendingCreatedAt) return;
+                window.__catPendingInternalInput = null;
+                const current = String(sendArea.value || '').trim();
+                if (shouldRestoreInternalInputDraft(current, translatedText)) setTextareaValue(sendArea, nextDraft || sourceText);
+                catNotify(`${getThemeEmoji()} 내부 번역 메시지 연결을 확인하지 못했어요. 입력창에 원문을 복구했습니다.`, 'warning');
+                console.warn('[CAT] ⚠️ 내부 번역 전송 메시지 연결 실패 → 입력창 원문 복구');
+            }, 60000);
+        } catch (error) {
+            console.warn('[CAT] 내부 입력 번역 실패:', error);
+            restoreInternalInputSource(sendArea, sourceText);
+            catNotify(`${getThemeEmoji()} 내부 번역 오류로 전송을 중단했어요.`, 'warning');
+        } finally {
+            _internalInputSendBusy = false;
+            transIcon.removeClass('cat-glow-anim');
+        }
+    };
+
+    document.addEventListener('click', interceptSend, true);
+    document.addEventListener('keydown', interceptSend, true);
+}
+
 export function injectInputButtons(settings, stContext, processMessageFn) {
+    setupInternalInputSendInterceptor(settings, stContext);
     if ($('#cat-input-btn').length > 0) {
         const icon = $('#cat-input-btn .cat-emoji-icon'); if (isTranslatingInput) icon.addClass('cat-glow-anim'); else icon.removeClass('cat-glow-anim');
         // 🚨 아이콘 숨김 설정 지속 적용
@@ -778,8 +991,10 @@ export function injectMessageButtons(processMessageFn, revertMessageFn) {
 
 // 🚨 🐟/🍖 → 바로 번역문 편집 모드 진입
 function enterTranslatedEdit(mesBlock, msg, msgId) {
-    const savedOriginal = msg.extra.original_mes;
+    const internalInput = getInternalInputState(msg);
+    const savedOriginal = internalInput?.sourceText || msg.extra.original_mes;
     const savedDisplay = msg.extra.display_text;
+    const translatedEditText = internalInput?.translatedText || savedDisplay || msg.mes;
     const editChatRef = SillyTavern?.getContext?.()?.chat;
     const editMessageRef = msg;
     const savedSwipeId = msg.swipe_id;
@@ -821,8 +1036,13 @@ function enterTranslatedEdit(mesBlock, msg, msgId) {
                 editSession.capturedText = $(this).val();
             }
         });
-        setTextareaValue(editArea[0], savedDisplay || activeMessage.mes);
-        catNotify(`${getCompletionEmoji()} 번역문 편집 모드`, "success");
+        setTextareaValue(editArea[0], translatedEditText);
+        catNotify(
+            internalInput
+                ? `${getCompletionEmoji()} AI 전달문(${internalInput.targetLang}) 편집 모드`
+                : `${getCompletionEmoji()} 번역문 편집 모드`,
+            "success"
+        );
 
         // 🚨 편집 닫힘 감지
         const _editWatcher = setInterval(() => {
@@ -842,6 +1062,36 @@ function enterTranslatedEdit(mesBlock, msg, msgId) {
                     typeof editSession.capturedText === 'string'
                     ? editSession.capturedText
                     : currentMes;
+                if (internalInput) {
+                    if (editSession.saveRequested && capturedTranslation.trim()) {
+                        applyInternalInputState(
+                            freshMsg,
+                            internalInput.sourceText,
+                            capturedTranslation,
+                            internalInput.targetLang
+                        );
+                        console.log(`[CAT] 🐟 내부 전달문 편집 저장 → AI 컨텍스트 갱신 #${msgId}`);
+                    } else {
+                        applyInternalInputState(
+                            freshMsg,
+                            internalInput.sourceText,
+                            internalInput.translatedText,
+                            internalInput.targetLang
+                        );
+                        console.log(`[CAT] 🐟 내부 전달문 편집 취소 → 기존 전달문 재적용 #${msgId}`);
+                    }
+                    clearTranslatedEditSession(msgId, editSession);
+                    mesBlock.removeData('cat-edit-type').removeData('cat-edit-active').removeData('cat-edit-display').removeData('cat-edit-original');
+                    mesBlock.attr('data-cat-translated', 'true');
+                    ctx.updateMessageBlock(msgId, freshMsg);
+                    try {
+                        const pending = ctx.saveChat?.();
+                        if (pending?.catch) pending.catch(e => console.warn('[CAT] 내부 전달문 편집 저장 실패:', e));
+                    } catch (e) {
+                        console.warn('[CAT] 내부 전달문 편집 저장 실패:', e);
+                    }
+                    return;
+                }
                 const translationWasSaved = editSession.saveRequested || currentMes !== savedOriginal;
                 if (!freshMsg.extra) freshMsg.extra = {};
                 if (translationWasSaved && capturedTranslation !== savedOriginal) {
@@ -1371,6 +1621,16 @@ export function setupMutationObserver(processMessageFn, revertMessageFn, setting
                 mesBlock.data('cat-edit-active', true);
                 if (msg.extra?.display_text) mesBlock.data('cat-edit-display', msg.extra.display_text);
                 if (msg.extra?.original_mes) mesBlock.data('cat-edit-original', msg.extra.original_mes);
+                const internalInput = getInternalInputState(msg);
+                if (internalInput && mesBlock.data('cat-edit-type') !== 'translated') {
+                    // ✏️는 원문 편집 버튼이다. 내부 전달문(msg.mes)이 아니라 사용자가
+                    // 작성한 한국어 원문을 편집창에 넣고, 저장 후 다시 내부 번역한다.
+                    mesBlock.data('cat-edit-type', 'internal-source');
+                    mesBlock.data('cat-internal-state', { ...internalInput });
+                    mesBlock.data('cat-internal-save-requested', false);
+                    setTextareaValue(editArea[0], internalInput.sourceText);
+                    console.log(`[CAT] ✏️ 내부 입력 한국어 원문 편집 진입 #${msgId}`);
+                }
                 
                 // 🚨 textarea에 직접 input 리스너 바인딩 (글로벌 Map에 저장)
                 const msgIdStr = String(msgId);
@@ -1389,6 +1649,9 @@ export function setupMutationObserver(processMessageFn, revertMessageFn, setting
                 if ($doneBtn.length > 0 && !$doneBtn.data('cat-direct-bound')) {
                     $doneBtn.data('cat-direct-bound', true);
                     $doneBtn.on('click.catdirect', function() {
+                        if (mesBlock.data('cat-edit-type') === 'internal-source') {
+                            mesBlock.data('cat-internal-save-requested', true);
+                        }
                         const directEditChatRef = SillyTavern?.getContext?.()?.chat || stContext.chat;
                         const $ta = mesBlock.find('textarea').first();
                         if ($ta.length > 0) {
@@ -1411,7 +1674,36 @@ export function setupMutationObserver(processMessageFn, revertMessageFn, setting
                 mesBlock.removeData('cat-edit-active');
                 
                 // 🚨 🐟/🍖 편집 팝업에서 진입한 편집은 _editWatcher가 처리 → 여기서 스킵
-                if (mesBlock.data('cat-edit-type')) return;
+                const editType = mesBlock.data('cat-edit-type');
+                if (editType === 'translated') return;
+                if (editType === 'internal-source') {
+                    const savedInternal = mesBlock.data('cat-internal-state');
+                    const saveRequested = mesBlock.data('cat-internal-save-requested') === true;
+                    mesBlock
+                        .removeData('cat-edit-type')
+                        .removeData('cat-edit-display')
+                        .removeData('cat-edit-original')
+                        .removeData('cat-internal-state')
+                        .removeData('cat-internal-save-requested');
+                    if (!saveRequested && savedInternal) {
+                        applyInternalInputState(
+                            msg,
+                            savedInternal.sourceText,
+                            savedInternal.translatedText,
+                            savedInternal.targetLang
+                        );
+                        mesBlock.attr('data-cat-translated', 'true');
+                        stContext.updateMessageBlock(msgId, msg);
+                        try {
+                            const pending = stContext.saveChat?.();
+                            if (pending?.catch) pending.catch(e => console.warn('[CAT] 내부 입력 편집 취소 복구 저장 실패:', e));
+                        } catch (e) {
+                            console.warn('[CAT] 내부 입력 편집 취소 복구 저장 실패:', e);
+                        }
+                        console.log(`[CAT] ✏️ 내부 입력 편집 취소 → 기존 한국어 표시/전달문 복구 #${msgId}`);
+                    }
+                    return;
+                }
                 
                 const savedDisplay = mesBlock.data('cat-edit-display');
                 const savedOriginal = mesBlock.data('cat-edit-original');

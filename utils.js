@@ -93,7 +93,7 @@ export function catNotifyProgress(message, onAbort) {
 }
 
 // 🚨 정밀 클리너: AI가 추가한 래핑만 제거, 원본 코드블록/YAML 보존!
-export const CAT_BETA_VERSION = '1.2.4';
+export const CAT_BETA_VERSION = '1.3.0';
 export const CAT_BUILD_CHANNEL = 'release';
 
 export function cleanResult(text, originalText = null, structureProtection = null) {
@@ -646,6 +646,9 @@ export function restoreProtectedTokenLeaks(text, protection) {
     return restored;
 }
 
+// 최종 표시용: 알려진 토큰은 원래 구조로 복원하고, 모델이 번호/이름까지
+// 바꿔 버려 복원 근거가 없는 토큰형 문자열은 제거한다. 단 원문에 실제로 있던
+// @0@ 같은 리터럴은 등장 횟수만큼 그대로 남긴다.
 export function sanitizeProtectedTokenLeaks(text, protection) {
     const restored = restoreProtectedTokenLeaks(text, protection);
     if (!protection?.hasStructure) {
@@ -1010,9 +1013,50 @@ function repairMacroCasing(sourceText, outputText) {
     return changed ? repaired : outputText;
 }
 
+// 응답 전체를 감싼 단일 HTML/XML 래퍼는 번역 대상이 아니라 운반용 구조다.
+// Gemma/MiMo 계열이 <Response>...</Response>만 벗겨도 장문 전체를 재호출하던
+// 비용 폭탄을 막기 위해, 동일 이름의 바깥 래퍼만 원문 표기로 결정론적 복원한다.
+function restoreSafeOuterEnvelope(sourceText, outputText) {
+    const sourceTrimmed = String(sourceText || '').trim();
+    const outputTrimmed = String(outputText || '').trim();
+    const outer = sourceTrimmed.match(/^(<([A-Za-z][\w:.-]*)(?:\s[^<>]*?)?>)([\s\S]*)(<\/\2>)$/);
+    if (!outer || !outputTrimmed) {
+        return { text: String(outputText || ''), repaired: false };
+    }
+
+    const [, sourceOpen, tagName, , sourceClose] = outer;
+    const escapedTag = escapeRegExp(tagName);
+    const outputOpen = outputTrimmed.match(new RegExp(`^<${escapedTag}(?:\\s[^<>]*?)?>`, 'i'));
+    const outputClose = outputTrimmed.match(new RegExp(`<\\/${escapedTag}>$`, 'i'));
+    const strayOpen = new RegExp(`<${escapedTag}(?:\\s|>)`, 'i').test(outputTrimmed.slice(outputOpen?.[0]?.length || 0));
+    const strayClose = new RegExp(`<\\/${escapedTag}>`, 'i').test(
+        outputClose ? outputTrimmed.slice(0, -outputClose[0].length) : outputTrimmed
+    );
+
+    // 같은 이름의 래퍼가 본문 안에 따로 있으면 무엇이 바깥 경계인지 단정하지 않는다.
+    if (strayOpen || strayClose) {
+        return { text: String(outputText || ''), repaired: false };
+    }
+
+    let repaired = outputTrimmed;
+    if (outputOpen) repaired = sourceOpen + repaired.slice(outputOpen[0].length);
+    else repaired = sourceOpen + repaired;
+    if (outputClose) repaired = repaired.slice(0, -outputClose[0].length) + sourceClose;
+    else repaired += sourceClose;
+
+    return {
+        text: repaired,
+        repaired: repaired !== outputTrimmed
+    };
+}
+
 export function validateTranslationStructure(source, output, options = {}) {
     const sourceText = String(source || '');
-    const normalized = repairStructuredKeyPrefixes(sourceText, String(output || ''));
+    const envelope = restoreSafeOuterEnvelope(sourceText, String(output || ''));
+    if (envelope.repaired) {
+        console.log('[CAT] 🔧 바깥 응답 래퍼 자동 복원');
+    }
+    const normalized = repairStructuredKeyPrefixes(sourceText, envelope.text);
     const caseRepaired = repairMacroCasing(sourceText, normalized.text);
     if (caseRepaired !== normalized.text) {
         console.log('[CAT] 🔧 매크로 대소문자 원문 표기로 복원');
@@ -1043,7 +1087,11 @@ export function validateTranslationStructure(source, output, options = {}) {
         ...parity,
         text: normalized.text,
         repairedKeys: normalized.repairedKeys,
-        boundaryRecovery: null
+        boundaryRecovery: null,
+        softNote: [
+            envelope.repaired ? '바깥 응답 래퍼 자동 복원' : null,
+            parity.softNote || null
+        ].filter(Boolean).join(' / ') || null
     };
 }
 
@@ -1248,7 +1296,9 @@ function getStructureSignature(text) {
 function getStructureMatches(text) {
     const matches = [];
     const patterns = [
-        /```[^\n]*/g,
+        // 닫는 펜스 바로 뒤의 </Response>까지 한 요소로 삼키지 않는다.
+        // 언어 식별자만 펜스 요소에 포함하고 뒤따르는 태그는 별도 요소로 센다.
+        /```[\t ]*[A-Za-z0-9_+.-]*/g,
         /<!--|-->|<\/?[a-zA-Z][^>]*>|\{\{[\s\S]*?\}\}/g,
         dividerLineRegex('gm')
     ];
@@ -1654,6 +1704,90 @@ export function resolveInputTranslationDirection(text, settings = {}) {
         shouldTranslate: analysis.total > 0 && !isClearlyLanguage(analysis, targetLang),
         analysis
     };
+}
+
+const INTERNAL_INPUT_LANGUAGES = new Set([
+    'English', 'Japanese', 'Chinese', 'German', 'Russian', 'French'
+]);
+
+export function normalizeInternalInputLanguage(value) {
+    const normalized = String(value || '').trim();
+    return INTERNAL_INPUT_LANGUAGES.has(normalized) ? normalized : 'English';
+}
+
+export function shouldKeepInternalInputEnter(eventLike, internalInputEnabled = false) {
+    if (!internalInputEnabled || eventLike?.type !== 'keydown') return false;
+    const isEnter = eventLike?.key === 'Enter' || eventLike?.keyCode === 13;
+    if (!isEnter || eventLike?.target?.id !== 'send_textarea') return false;
+    // 일반 Enter는 IME 상태와 무관하게 전송 경로에서 제외한다.
+    // Android 키보드가 compositionend를 먼저 보내 isComposing=false가 되어도 안전하다.
+    return !eventLike.shiftKey && !eventLike.ctrlKey && !eventLike.altKey && !eventLike.metaKey;
+}
+
+export function resolvePendingInternalInputMatch(pending, message, chatRef, now = Date.now()) {
+    if (!pending || !message?.is_user || !Array.isArray(chatRef)) {
+        return { ok: false, chatChanged: false };
+    }
+    const freshEnough = Number(now) - Number(pending.createdAt || 0) < 120000;
+    const samePayload = String(message.mes || '').trim() === String(pending.translatedText || '').trim();
+    return {
+        ok: freshEnough && samePayload,
+        chatChanged: pending.chatRef !== chatRef
+    };
+}
+
+export function shouldRestoreInternalInputDraft(currentValue, translatedText) {
+    const current = String(currentValue || '').trim();
+    return !current || current === String(translatedText || '').trim();
+}
+
+export function getInternalInputState(message) {
+    const state = message?.extra?.cat_internal_input;
+    if (!state || state.version !== 1) return null;
+    const sourceText = String(state.sourceText || '');
+    const translatedText = String(state.translatedText || '');
+    if (!sourceText.trim() || !translatedText.trim()) return null;
+    return {
+        version: 1,
+        sourceText,
+        translatedText,
+        targetLang: normalizeInternalInputLanguage(state.targetLang)
+    };
+}
+
+export function applyInternalInputState(message, sourceText, translatedText, targetLang) {
+    if (!message) return null;
+    const source = String(sourceText || '').trim();
+    const translated = String(translatedText || '').trim();
+    if (!source || !translated) return null;
+    if (!message.extra) message.extra = {};
+    const state = {
+        version: 1,
+        sourceText: source,
+        translatedText: translated,
+        targetLang: normalizeInternalInputLanguage(targetLang)
+    };
+    message.extra.cat_internal_input = state;
+    // 화면과 ✏️ 원문 편집에는 사용자가 쓴 한국어, 실제 AI 컨텍스트에는 번역문.
+    message.extra.original_mes = source;
+    message.extra.display_text = source;
+    message.mes = translated;
+    return state;
+}
+
+export function clearInternalInputState(message) {
+    const state = getInternalInputState(message);
+    if (!message || !state) return false;
+    message.mes = state.sourceText;
+    if (message.extra) {
+        delete message.extra.cat_internal_input;
+        delete message.extra.original_mes;
+        delete message.extra.display_text;
+        delete message.extra.cat_literal;
+        delete message.extra.cat_prev_display;
+        delete message.extra.cat_swipe_id;
+    }
+    return true;
 }
 
 export function detectLanguageDirection(text, settings) {
