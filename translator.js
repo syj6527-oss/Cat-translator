@@ -403,7 +403,7 @@ Example: "He slammed his fist on the table." → "그가 주먹으로 탁자를 
         prompt: `Translate naturally in casual conversational tone. Contractions and colloquialisms are welcome.
 Example: "I can't believe you actually did that." → "야 진짜 그걸 해버린 거야?"
 Example: "She was pretty upset about it." → "걔 그거 때문에 꽤 열받았더라."` },
-    natural: { label: '번역체 탈피', temperature: 0.4,
+    natural: { label: '자연스러운 한국어', temperature: 0.4,
         prompt: `Translate into natural, native-sounding Korean. Avoid translationese. Restructure sentences to follow natural Korean word order.
 BAD: "그녀는 그것에 대해 생각하는 것을 멈출 수가 없었다."
 GOOD: "그녀는 도무지 그 생각을 떨칠 수가 없었다."
@@ -2866,9 +2866,12 @@ export function assemblePrompt(text, targetLang, isToEnglish, settings, options 
         compactFastPrompt = false
     } = options;
     const bilingualMode = settings.dialogueBilingual || 'off';
+    const commonPrompt = String(settings.commonPrompt || settings.userPrompt || '').trim();
+    const narrationPrompt = String(settings.narrationPrompt || '').trim();
+    const dialoguePrompt = String(settings.dialoguePrompt || '').trim();
     
     // 🚨 병기 모드 ON이면 짧은 텍스트도 풀 프롬프트 경로 강제 사용
-    if (bilingualMode === 'off' && settings.literalBilingual !== 'on' && !structureProtected && !retryReason && text.length < 100 && !prevTranslation && contextMessages.length === 0 && (!settings.dictionary || !settings.dictionary.trim()) && (!settings.userPrompt || !settings.userPrompt.trim())) {
+    if (bilingualMode === 'off' && settings.literalBilingual !== 'on' && !structureProtected && !retryReason && text.length < 100 && !prevTranslation && contextMessages.length === 0 && (!settings.dictionary || !settings.dictionary.trim()) && !commonPrompt && !narrationPrompt && !dialoguePrompt) {
         const lang = isToEnglish ? 'English' : targetLang;
         const preset = STYLE_PRESETS[settings.style] || STYLE_PRESETS.normal;
         const styleHint = settings.style !== 'normal' ? ` Style: ${preset.prompt.split('\n')[0]}` : '';
@@ -3097,7 +3100,24 @@ Just plain, fully-translated text.
 `);
     }
     
-    if (settings.userPrompt && settings.userPrompt.trim()) { parts.push(`[Additional instructions: ${settings.userPrompt.trim()}]`); }
+    if (commonPrompt) {
+        parts.push(`[USER GLOBAL TRANSLATION INSTRUCTIONS]
+Apply these instructions to the entire translation, including narration and spoken dialogue.
+More specific narration or dialogue instructions below override them only within their own scope. Never change facts, meaning, structure, or formatting.
+${commonPrompt}`);
+    }
+    if (narrationPrompt) {
+        parts.push(`[USER NARRATION / PROSE INSTRUCTIONS]
+Apply these instructions ONLY to narration, description, action, and internal thought outside spoken quotation marks.
+Never apply them to spoken dialogue. They override conflicting style guidance only within narration, but may not change facts, meaning, structure, or formatting.
+${narrationPrompt}`);
+    }
+    if (dialoguePrompt) {
+        parts.push(`[USER DIALOGUE / SPEECH INSTRUCTIONS]
+Apply these instructions ONLY to spoken dialogue inside quotation marks.
+Never apply them to narration or description. When they conflict with inferred context speech patterns, follow these explicit user instructions, but preserve meaning, structure, and formatting.
+${dialoguePrompt}`);
+    }
     
     if (settings.dictionary && settings.dictionary.trim()) {
         // 🚨 본문에 실제 존재하는 사전 항목만 필터링 (AI가 무관한 항목을 오적용하는 것 방지)

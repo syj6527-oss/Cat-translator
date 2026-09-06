@@ -93,7 +93,7 @@ export function catNotifyProgress(message, onAbort) {
 }
 
 // 🚨 정밀 클리너: AI가 추가한 래핑만 제거, 원본 코드블록/YAML 보존!
-export const CAT_BETA_VERSION = '1.3.0';
+export const CAT_BETA_VERSION = '1.3.2';
 export const CAT_BUILD_CHANNEL = 'release';
 
 export function cleanResult(text, originalText = null, structureProtection = null) {
@@ -1570,13 +1570,16 @@ export function getCacheModelKey(settings) {
     const literalMode = settings.literalBilingual === 'on' ? 'on' : 'off';
     const style = settings.style || 'normal';
     const temperature = Number.isFinite(Number(settings.temperature)) ? Number(settings.temperature) : 0.3;
-    const promptHash = hashCacheSetting(settings.userPrompt || '');
+    const commonPromptHash = hashCacheSetting(settings.commonPrompt || settings.userPrompt || '');
+    const narrationPromptHash = hashCacheSetting(settings.narrationPrompt || '');
+    const dialoguePromptHash = hashCacheSetting(settings.dialoguePrompt || '');
     const dictionaryHash = hashCacheSetting(settings.dictionary || '');
     const contextRange = Number.isFinite(Number(settings.contextRange)) ? Number(settings.contextRange) : 1;
+    const fastMode = settings.nonGeminiFastMode || 'off';
     
-    return `${key}::cache-v3::dialogue:${dialogueMode}::literal:${literalMode}` +
+    return `${key}::cache-v5::dialogue:${dialogueMode}::literal:${literalMode}` +
         `::style:${style}::temp:${temperature}::context:${contextRange}` +
-        `::prompt:${promptHash}::dict:${dictionaryHash}`;
+        `::fast:${fastMode}::commonPrompt:${commonPromptHash}::narrationPrompt:${narrationPromptHash}::dialoguePrompt:${dialoguePromptHash}::dict:${dictionaryHash}`;
 }
 
 function hashCacheSetting(value) {
@@ -1680,13 +1683,13 @@ export function getInputTargetLanguage(settings = {}) {
 
 // 🚨 v1.1.4-beta.3: 인풋(사용자 입력) 번역 전용 프롬프트 해석 — 단일 출처.
 // 인풋 진입점 3곳(index.js 자동/스마트, ui.js 버튼)이 공용한다.
-// - inputUserPrompt가 비어있으면 기존 공용 userPrompt로 폴백 → 기존 사용자 동작 불변.
-// - inputUserPrompt는 defaultSettings에만 존재하고 프리셋/baseline 수집 코드가
-//   참조하지 않으므로, 캐릭터 프리셋 스왑과 무관한 전역·독립 설정으로 유지된다.
-// - 캐시 키는 최종 settings.userPrompt 해시를 쓰므로 인풋 캐시는 자동 분리된다.
+// - 공통 지침은 인풋에도 적용하고, 인풋 전용 → 대사 → 서술 순서의 세부 지침을 합친다.
+// - 구버전 설정은 마지막으로 userPrompt를 공통 지침처럼 읽어 업데이트 직후에도 동작을 보존한다.
+// - 호출부는 반환값을 dialoguePrompt로 전달하므로 인풋 발화에만 적용된다.
 export function resolveInputUserPrompt(settings = {}) {
-    const inputPrompt = String(settings.inputUserPrompt || '');
-    return inputPrompt.trim() ? inputPrompt : (settings.userPrompt || '');
+    const commonPrompt = String(settings.commonPrompt || settings.userPrompt || '').trim();
+    const specificPrompt = String(settings.inputUserPrompt || settings.dialoguePrompt || settings.narrationPrompt || '').trim();
+    return [...new Set([commonPrompt, specificPrompt].filter(Boolean))].join('\n');
 }
 
 export function resolveInputTranslationDirection(text, settings = {}) {
